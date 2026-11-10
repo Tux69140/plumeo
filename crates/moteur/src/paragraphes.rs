@@ -153,6 +153,15 @@ pub fn paragraphes_page(lignes: &[Ligne], page: u32, moitie: Moitie, bloc: BlocT
 
 const PONCTUATION_FINALE: [char; 9] = ['.', '!', '?', ':', '\u{BB}', '\u{2026}', ')', '"', '\u{201D}'];
 
+/// Dernier caractère non blanc des segments `Texte` : appels de note et
+/// exposants en fin de paragraphe sont ignorés.
+fn dernier_caractere_de_texte(segments: &[Segment]) -> Option<char> {
+    segments.iter().rev().find_map(|s| match s {
+        Segment::Texte { texte, .. } => texte.trim_end().chars().last(),
+        _ => None,
+    })
+}
+
 /// Colle `suite` à `p` (paragraphe coupé par un saut de page).
 fn fusionner(p: &mut Paragraphe, suite: Paragraphe) {
     let cesure = finit_par_cesure(&p.texte_brut())
@@ -189,8 +198,8 @@ pub fn raccorder_pages(blocs: Vec<Bloc>) -> Vec<Bloc> {
         let precedent = sortie.iter_mut().rev().find(|b| !matches!(b, Bloc::Note { .. }));
         if let Some(Bloc::Paragraphe(p)) = precedent {
             let autre_page = (p.ancre.page, p.ancre.moitie) != (suite.ancre.page, suite.ancre.moitie);
-            let texte = p.texte_brut();
-            let ouvert = texte.trim_end().chars().last().is_some_and(|c| !PONCTUATION_FINALE.contains(&c));
+            let ouvert = dernier_caractere_de_texte(&p.segments)
+                .is_some_and(|c| !PONCTUATION_FINALE.contains(&c));
             if autre_page && ouvert && !suite.texte_brut().is_empty() {
                 fusionner(p, suite);
                 continue;
@@ -374,6 +383,38 @@ mod tests {
         assert_eq!(r.len(), 2);
         assert_eq!(texte_de(&r[0]), "ce que l'on dit");
         assert!(matches!(r[1], Bloc::Note { .. }));
+    }
+
+    fn para_avec_fin(texte: &str, fin: Segment) -> Bloc {
+        let Bloc::Paragraphe(mut p) = para(texte, 4, 0.8) else { unreachable!() };
+        p.segments.push(fin);
+        Bloc::Paragraphe(p)
+    }
+
+    fn appel() -> Segment {
+        Segment::AppelNote { etiquette: "1-1".into(), marqueur: "1".into() }
+    }
+
+    #[test]
+    fn raccord_ignore_l_appel_de_note_final() {
+        let r = raccorder_pages(vec![para_avec_fin("la fin.", appel()), para("Suite", 5, 0.1)]);
+        assert_eq!(r.len(), 2);
+    }
+
+    #[test]
+    fn raccord_ignore_l_exposant_final() {
+        let r = raccorder_pages(vec![
+            para_avec_fin("la fin.", Segment::Exposant("1".into())),
+            para("Suite", 5, 0.1),
+        ]);
+        assert_eq!(r.len(), 2);
+    }
+
+    #[test]
+    fn raccord_malgre_un_appel_de_note_apres_un_mot() {
+        let r = raccorder_pages(vec![para_avec_fin("ce que", appel()), para("l'on dit", 5, 0.1)]);
+        assert_eq!(r.len(), 1);
+        assert_eq!(texte_de(&r[0]), "ce que1 l'on dit");
     }
 
     #[test]
