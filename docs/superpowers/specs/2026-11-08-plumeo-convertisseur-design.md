@@ -222,9 +222,12 @@ en page.
   l'ouvrent en **fenêtre surgissante** ; chaque note porte en plus un **lien retour ↩**
   vers son appel, pour revenir à la position de lecture sur les liseuses qui sautent à la
   note.
-- **Métadonnées** *(choix de conception)* : titre et auteur proposés depuis les
-  métadonnées du PDF, à défaut depuis le nom du fichier, toujours modifiables (elles sont
-  souvent fausses : « Microsoft Word - F - Les Anges et l'Abre de Vie », « Livres AAB »).
+- **Métadonnées** *(choix de conception)* : titre et auteur proposés **d'abord depuis le
+  nom du fichier**, les métadonnées du PDF ne servant qu'à compléter (titre tronqué dans
+  le nom, auteur absent du nom) ; toujours modifiables. Mesure du 2026-11-10 sur le
+  corpus : métadonnées inversées (#1 : titre « Aïvanhov, Omraam Mikhaël »), fausses (#2 :
+  auteur « Windows », titre « Microsoft Word - F - Les Anges et l'Abre de Vie » ; #7 :
+  « Livres AAB » / « AAB ») ou absentes (#3, #6).
 - **Couverture** *(choix de conception)* : rendu image de la page 1, remplaçable.
 - Tableaux en HTML, images embarquées.
 - L'EPUB doit passer **epubcheck** sans erreur.
