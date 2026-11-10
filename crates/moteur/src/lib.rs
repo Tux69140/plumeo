@@ -8,5 +8,7 @@ pub mod lignes;
 pub mod modele;
 pub mod paragraphes;
 pub mod pdf;
+pub mod points;
 pub mod reglages;
+pub mod titres;
 pub mod zones;
