@@ -10,6 +10,10 @@ fixtures = ["dep:tempfile"]
 name = "lecture"
 required-features = ["fixtures"]
 
+[[test]]
+name = "conversion"
+required-features = ["fixtures"]
+
 [dependencies]
 pdfium-render = { version = "0.9.5", default-features = false, features = ["pdfium_8125", "thread_safe", "image_latest"] }
 serde = { version = "1", features = ["derive"] }
