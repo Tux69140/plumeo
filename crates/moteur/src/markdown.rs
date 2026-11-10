@@ -23,29 +23,84 @@ pub fn echapper_md(texte: &str, debut_de_bloc: bool) -> String {
     sortie
 }
 
-fn rendre_segments(segments: &[Segment]) -> String {
-    let mut sortie = String::new();
+/// Fusionne les segments `Texte` voisins de même style.
+fn fusionner(segments: &[Segment]) -> Vec<Segment> {
+    let mut sortie: Vec<Segment> = Vec::new();
     for segment in segments {
-        let debut = sortie.trim().is_empty();
+        if let (
+            Some(Segment::Texte { texte: t, gras: g, italique: i }),
+            Segment::Texte { texte, gras, italique },
+        ) = (sortie.last_mut(), segment)
+            && g == gras
+            && i == italique
+        {
+            t.push_str(texte);
+            continue;
+        }
+        sortie.push(segment.clone());
+    }
+    sortie
+}
+
+/// Premier caractère que produira le segment (pour juger de l'encadrement des marqueurs).
+fn premier_caractere(segment: Option<&Segment>) -> Option<char> {
+    match segment? {
+        Segment::Texte { texte, .. } => texte.chars().next(),
+        Segment::Exposant(_) => Some('<'),
+        Segment::AppelNote { .. } => Some('['),
+    }
+}
+
+fn est_ponctuation(c: char) -> bool {
+    !c.is_alphanumeric() && !c.is_whitespace()
+}
+
+/// Les délimiteurs `*` ouvrant et fermant sont-ils reconnus par CommonMark ?
+fn encadrement_valide(avant: Option<char>, coeur: &str, apres: Option<char>) -> bool {
+    let (Some(premier), Some(dernier)) = (coeur.chars().next(), coeur.chars().next_back()) else {
+        return false;
+    };
+    let isole = |c: Option<char>| c.is_none_or(|c| c.is_whitespace() || est_ponctuation(c));
+    let ouvrant = !est_ponctuation(premier) || isole(avant);
+    let fermant = !est_ponctuation(dernier) || isole(apres);
+    ouvrant && fermant
+}
+
+fn rendre_segments(segments: &[Segment]) -> String {
+    let segments = fusionner(segments);
+    let mut sortie = String::new();
+    for (i, segment) in segments.iter().enumerate() {
         match segment {
             Segment::Texte { texte, gras, italique } => {
+                let texte = if sortie.is_empty() { texte.trim_start() } else { texte.as_str() };
                 let coeur = texte.trim();
                 if coeur.is_empty() || (!gras && !italique) {
-                    let debut_texte = debut && !texte.starts_with(char::is_whitespace);
-                    sortie.push_str(&echapper_md(texte, debut_texte));
+                    let debut = sortie.is_empty();
+                    sortie.push_str(&echapper_md(texte, debut));
                     continue;
                 }
                 let tete = &texte[..texte.len() - texte.trim_start().len()];
                 let queue = &texte[texte.trim_end().len()..];
-                let marqueur = match (gras, italique) {
-                    (true, true) => "***",
-                    (true, false) => "**",
-                    _ => "*",
-                };
                 sortie.push_str(tete);
-                sortie.push_str(marqueur);
+                let avant = sortie.chars().next_back();
+                let apres = queue.chars().next().or_else(|| premier_caractere(segments.get(i + 1)));
+                let (ouvre, ferme) = if encadrement_valide(avant, coeur, apres) {
+                    let m = match (gras, italique) {
+                        (true, true) => "***",
+                        (true, false) => "**",
+                        _ => "*",
+                    };
+                    (m, m)
+                } else {
+                    match (gras, italique) {
+                        (true, true) => ("<strong><em>", "</em></strong>"),
+                        (true, false) => ("<strong>", "</strong>"),
+                        _ => ("<em>", "</em>"),
+                    }
+                };
+                sortie.push_str(ouvre);
                 sortie.push_str(&echapper_md(coeur, false));
-                sortie.push_str(marqueur);
+                sortie.push_str(ferme);
                 sortie.push_str(queue);
             }
             Segment::Exposant(texte) => {
@@ -59,7 +114,7 @@ fn rendre_segments(segments: &[Segment]) -> String {
         }
     }
     // Une seule ligne : les sauts éventuels deviennent des espaces.
-    sortie.replace(['\n', '\r'], " ").trim().to_string()
+    sortie.replace(['\n', '\r'], " ").trim_end().to_string()
 }
 
 fn bloc_ancre(sortie: &mut Vec<String>, ancre: Ancre, ligne: String) {
@@ -135,6 +190,50 @@ mod tests {
         assert!(ecrire_markdown(&[b]).contains("\nun *beau jour* ***x***\n"));
         let b = para(vec![texte("a", false, false), texte(" ", false, true), texte("b", false, false)]);
         assert!(ecrire_markdown(&[b]).contains("\na b\n"));
+    }
+
+    fn rendu(segments: Vec<Segment>) -> String {
+        let md = ecrire_markdown(&[para(segments)]);
+        md.lines().nth(1).unwrap().to_string()
+    }
+
+    #[test]
+    fn debut_de_bloc_apres_espaces() {
+        assert_eq!(rendu(vec![texte(" 1. Visite", false, false)]), "1\\. Visite");
+        assert_eq!(rendu(vec![texte(" # x", false, false)]), "\\# x");
+        assert_eq!(rendu(vec![texte(" ", false, false), texte("- x", false, false)]), "\\- x");
+    }
+
+    #[test]
+    fn encadrement_des_marqueurs() {
+        // ponctuation collée à une lettre : balises HTML
+        assert_eq!(
+            rendu(vec![texte("a ", false, false), texte("(mot)", false, true), texte("suite", false, false)]),
+            "a <em>(mot)</em>suite"
+        );
+        assert_eq!(
+            rendu(vec![texte("mot", false, false), texte("(x)", false, true)]),
+            "mot<em>(x)</em>"
+        );
+        assert_eq!(rendu(vec![texte("mot", false, false), texte("ab", true, false)]), "mot**ab**");
+        assert_eq!(
+            rendu(vec![texte("a ", false, false), texte("(x)", true, true), texte("b", false, false)]),
+            "a <strong><em>(x)</em></strong>b"
+        );
+        // ponctuation entourée d'espaces : marqueurs normaux
+        assert_eq!(
+            rendu(vec![texte("a ", false, false), texte("(mot)", false, true), texte(" b", false, false)]),
+            "a *(mot)* b"
+        );
+    }
+
+    #[test]
+    fn segments_voisins_fusionnes() {
+        assert_eq!(rendu(vec![texte("a", false, true), texte("b", false, true)]), "*ab*");
+        assert_eq!(
+            rendu(vec![texte("x ", false, false), texte("gras ", true, false), texte("ital", false, true)]),
+            "x **gras** *ital*"
+        );
     }
 
     #[test]

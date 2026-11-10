@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-use crate::blocs::Bloc;
+use crate::blocs::{Bloc, Segment};
 use crate::double_page::couper_double_page;
 use crate::lignes::{Ligne, regrouper_en_lignes};
 use crate::markdown::ecrire_markdown;
@@ -31,6 +31,7 @@ pub struct Conversion {
 pub struct ApercuPage {
     /// Pour chaque (demi-)page : texte du corps et retraits.
     pub moities: Vec<(Moitie, String, Vec<Retrait>)>,
+    pub points: Vec<PointAVerifier>,
 }
 
 /// (demi-)page lue, classée.
@@ -102,11 +103,7 @@ pub fn convertir_livre(
         let (page, classee) = (&lue.page, &lue.classee);
         let paragraphes = paragraphes_page(&classee.corps, page.numero, page.moitie, bloc);
         if classee.corps.is_empty() && classee.notes.is_empty() {
-            points.push(PointAVerifier {
-                ancre: ancre_entiere(page),
-                genre: GenrePoint::PageSansTexte,
-                message: format!("la page {} ne contient aucun texte", page.numero),
-            });
+            points.push(point_page_sans_texte(page));
         }
         let (de_page, pts) =
             notes_bas_de_page(paragraphes, &classee.notes, page.numero, page.moitie, &mut etiqueteuse);
@@ -126,20 +123,53 @@ pub fn convertir_livre(
     Ok(Conversion { markdown: ecrire_markdown(&blocs), retraits, points, source_titres, nb_pages, nb_notes })
 }
 
-/// Texte du corps d'une seule page, avec ses retraits (bloc mesuré sur cette page seule).
+fn texte_des_segments(segments: &[Segment]) -> String {
+    segments
+        .iter()
+        .map(|s| match s {
+            Segment::Texte { texte, .. } | Segment::Exposant(texte) => texte.as_str(),
+            Segment::AppelNote { marqueur, .. } => marqueur.as_str(),
+        })
+        .collect()
+}
+
+/// Texte d'une seule page (paragraphes puis notes « marqueur texte »), avec ses
+/// retraits et ses points ; le bloc est mesuré sur cette page seule.
 pub fn apercu_page(doc: &DocumentPdf, numero: u32, reglages: &ReglagesSerie) -> Result<ApercuPage, ErreurMoteur> {
     let lues = lire_page(doc, numero, reglages)?;
     let bloc = mesurer_bloc(&corps_de(&lues));
-    let moities = lues
-        .into_iter()
-        .map(|lue| {
-            let texte = paragraphes_page(&lue.classee.corps, lue.page.numero, lue.page.moitie, bloc)
-                .iter()
-                .map(|p| p.texte_brut())
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            (lue.page.moitie, texte, lue.classee.retraits)
-        })
-        .collect();
-    Ok(ApercuPage { moities })
+    let mut etiqueteuse = Etiqueteuse::new();
+    let mut points = Vec::new();
+    let mut moities = Vec::new();
+    for lue in lues {
+        let (page, classee) = (&lue.page, &lue.classee);
+        if classee.corps.is_empty() && classee.notes.is_empty() {
+            points.push(point_page_sans_texte(page));
+        }
+        let paragraphes = paragraphes_page(&classee.corps, page.numero, page.moitie, bloc);
+        let (blocs, pts) =
+            notes_bas_de_page(paragraphes, &classee.notes, page.numero, page.moitie, &mut etiqueteuse);
+        points.extend(pts);
+        let texte = blocs
+            .iter()
+            .map(|b| match b {
+                Bloc::Paragraphe(p) => texte_des_segments(&p.segments),
+                Bloc::Note { marqueur, segments, .. } => {
+                    format!("{marqueur} {}", texte_des_segments(segments))
+                }
+                Bloc::Titre { texte, .. } => texte.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        moities.push((page.moitie, texte, lue.classee.retraits));
+    }
+    Ok(ApercuPage { moities, points })
+}
+
+fn point_page_sans_texte(page: &Page) -> PointAVerifier {
+    PointAVerifier {
+        ancre: ancre_entiere(page),
+        genre: GenrePoint::PageSansTexte,
+        message: format!("la page {} ne contient aucun texte", page.numero),
+    }
 }
