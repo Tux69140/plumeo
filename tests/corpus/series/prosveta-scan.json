@@ -1,0 +1,26 @@
+{
+  "nom": "prosveta-scan",
+  "paire": { "entete": 0.105, "pied": 0, "notes": 0 },
+  "impaire": { "entete": 0.105, "pied": 0, "notes": 0 },
+  "exceptions": {
+    "4": { "entete": 0, "pied": 0, "notes": 0 },
+    "9": { "entete": 0, "pied": 0, "notes": 0 },
+    "12": { "entete": 0.105, "pied": 0, "notes": 0.14 },
+    "18": { "entete": 0.105, "pied": 0, "notes": 0.664 },
+    "19": { "entete": 0.105, "pied": 0, "notes": 0.215 },
+    "33": { "entete": 0.105, "pied": 0, "notes": 0.193 },
+    "36": { "entete": 0.105, "pied": 0, "notes": 0.155 },
+    "38": { "entete": 0.105, "pied": 0, "notes": 0.155 },
+    "53": { "entete": 0.105, "pied": 0, "notes": 0.161 },
+    "57": { "entete": 0.105, "pied": 0, "notes": 0.166 },
+    "109": { "entete": 0.105, "pied": 0, "notes": 0.145 },
+    "112": { "entete": 0.105, "pied": 0, "notes": 0.156 },
+    "123": { "entete": 0.105, "pied": 0, "notes": 0.218 },
+    "125": { "entete": 0.105, "pied": 0, "notes": 0.145 },
+    "156": { "entete": 0.105, "pied": 0, "notes": 0.365 },
+    "160": { "entete": 0.105, "pied": 0, "notes": 0.159 },
+    "170": { "entete": 0.105, "pied": 0, "notes": 0.137 },
+    "174": { "entete": 0.105, "pied": 0, "notes": 0.258 },
+    "186": { "entete": 0.105, "pied": 0, "notes": 0.158 }
+  }
+}

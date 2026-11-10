@@ -1,0 +1,6 @@
+{
+  "nom": "omnipage-double",
+  "double_page": 0.5,
+  "paire": { "entete": 0, "pied": 0.11, "notes": 0 },
+  "impaire": { "entete": 0, "pied": 0.11, "notes": 0 }
+}
