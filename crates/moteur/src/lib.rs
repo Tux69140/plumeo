@@ -7,6 +7,7 @@ pub mod convertir;
 pub mod double_page;
 pub mod lignes;
 pub mod markdown;
+pub mod metadonnees;
 pub mod modele;
 pub mod notes;
 pub mod paragraphes;
