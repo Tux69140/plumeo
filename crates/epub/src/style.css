@@ -1,3 +1,4 @@
+@namespace epub "http://www.idpf.org/2007/ops";
 body { font-family: serif; line-height: 1.4; margin: 0 5%; }
 h1, h2, h3 { font-family: sans-serif; line-height: 1.2; }
 p { margin: 0; text-indent: 1.2em; }

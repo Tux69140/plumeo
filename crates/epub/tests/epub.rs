@@ -152,6 +152,53 @@ fn couverture() {
     assert!(spine[premier..].starts_with("<itemref idref=\"couverture\""), "{spine}");
 }
 
+fn chap1(md: &str) -> String {
+    let (_d, c) = fabriquer(md, None);
+    texte(&entrees(&c), "OEBPS/chap-001.xhtml")
+}
+
+#[test]
+fn html_brut_assaini() {
+    let x = chap1("# T\n\nA <img src=\"a.png\"> et <BR> puis <span>x\n");
+    assert!(x.contains("<img src=\"a.png\" />"), "{x}");
+    assert!(x.contains("<br />"), "{x}");
+    assert!(x.contains("&lt;span>x") || x.contains("&lt;span&gt;x"), "{x}");
+    assert!(!x.contains("<span"), "{x}");
+}
+
+#[test]
+fn em_desequilibre_est_une_erreur() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = generer_epub("# T\n\nA <em>b\n\nc</em>\n", &meta(), None, &dir.path().join("x.epub"));
+    assert!(matches!(r, Err(plumeo_epub::ErreurEpub::XhtmlInvalide { chapitre: 1, .. })), "{r:?}");
+}
+
+#[test]
+fn appel_sans_definition_et_definition_sans_appel() {
+    let x = chap1("# T\n\nA[^9-1] sans def.\n");
+    assert!(x.contains("A<sup>1</sup> sans def."), "{x}");
+    assert!(!x.contains("[^"), "{x}");
+    let x = chap1("# T\n\nA.\n\n[^2-5]: Orpheline.\n");
+    assert!(x.contains("id=\"note-2\"") && x.contains("Orpheline."), "{x}");
+    assert!(!x.contains("href=\"#appel-2\""), "{x}");
+}
+
+#[test]
+fn appel_repete_ids_uniques() {
+    let x = chap1("# T\n\nA[^1-1] B[^1-1]\n\n[^1-1]: N.\n");
+    assert_eq!(x.matches("id=\"appel-1\"").count(), 1, "{x}");
+    assert_eq!(x.matches("id=\"appel-1-2\"").count(), 1, "{x}");
+    assert!(x.contains("<a href=\"#appel-1\">↩</a>"));
+}
+
+#[test]
+fn titre_vide_retombe_sur_le_titre_du_livre() {
+    let (_d, c) = fabriquer("#\n\nx\n", None);
+    let e = entrees(&c);
+    assert!(texte(&e, "OEBPS/nav.xhtml").contains(">Le Livre<"));
+    assert!(texte(&e, "OEBPS/chap-001.xhtml").contains("<title>Le Livre</title>"));
+}
+
 #[test]
 #[ignore]
 fn epubcheck() {

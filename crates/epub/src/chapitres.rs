@@ -25,9 +25,9 @@ impl Brouillon {
         Brouillon { titre, sous_titres: Vec::new(), evenements: Vec::new(), notes: Vec::new(), significatif: false }
     }
 
-    fn finir(self) -> Chapitre {
+    fn finir(self, titre_livre: &str) -> Chapitre {
         Chapitre {
-            titre: self.titre,
+            titre: if self.titre.trim().is_empty() { titre_livre.to_string() } else { self.titre },
             sous_titres: self.sous_titres,
             corps: xhtml::rendre_corps(self.evenements, self.notes),
         }
@@ -70,7 +70,7 @@ pub fn decouper(markdown: &str, titre_livre: &str) -> Vec<Chapitre> {
         match evt {
             Event::Start(Tag::Heading { level: HeadingLevel::H1, .. }) => {
                 if courant.significatif || !chapitres.is_empty() || !courant.notes.is_empty() {
-                    chapitres.push(courant.finir());
+                    chapitres.push(courant.finir(titre_livre));
                 }
                 courant = Brouillon::nouveau(String::new());
                 courant.significatif = true;
@@ -124,7 +124,7 @@ pub fn decouper(markdown: &str, titre_livre: &str) -> Vec<Chapitre> {
         }
     }
     if courant.significatif || chapitres.is_empty() {
-        chapitres.push(courant.finir());
+        chapitres.push(courant.finir(titre_livre));
     }
     chapitres
 }
