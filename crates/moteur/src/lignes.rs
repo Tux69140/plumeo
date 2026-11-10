@@ -69,22 +69,30 @@ fn hauteur(m: &Mot) -> f32 {
 /// Les mots sont traités du plus haut au plus bas (hauteur de rectangle) : le
 /// premier mot d'une ligne en est donc le plus grand, et son rectangle vertical
 /// sert de référence. Un mot rejoint la ligne dont la référence contient son
-/// centre vertical ; un mot nettement plus petit (exposant, ponctuation) peut
-/// aussi la rejoindre par simple chevauchement, la ligne au plus grand
-/// chevauchement l'emportant.
+/// centre vertical ; un mot nettement plus petit (exposant : rectangle plus bas et
+/// police plus petite) peut aussi la rejoindre par simple chevauchement, la ligne
+/// au plus grand chevauchement l'emportant.
+///
+/// Les mots sans lettre ni chiffre (ponctuation) passent en dernier et ne servent
+/// jamais de référence : l'OCR leur donne parfois un rectangle plus haut que la
+/// ligne, à cheval sur deux lignes, qui les aurait fusionnées. Ils rejoignent la
+/// ligne qu'ils chevauchent le plus.
 pub fn regrouper_en_lignes(mots: &[Mot]) -> Vec<Ligne> {
+    let ponctuation = |m: &Mot| !m.texte.chars().any(char::is_alphanumeric);
     let mut ordre: Vec<&Mot> = mots.iter().collect();
-    ordre.sort_by(|a, b| hauteur(b).total_cmp(&hauteur(a)));
+    ordre.sort_by(|a, b| ponctuation(a).cmp(&ponctuation(b)).then(hauteur(b).total_cmp(&hauteur(a))));
 
-    // (référence y0, référence y1, mots)
-    let mut groupes: Vec<(f32, f32, Vec<Mot>)> = Vec::new();
+    // (référence y0, référence y1, taille de la référence, mots)
+    let mut groupes: Vec<(f32, f32, f32, Vec<Mot>)> = Vec::new();
     for mot in ordre {
         let c = centre_y(mot);
         let mut meilleur: Option<(usize, f32)> = None;
-        for (i, (y0, y1, _)) in groupes.iter().enumerate() {
+        for (i, (y0, y1, taille, _)) in groupes.iter().enumerate() {
             let chevauchement = mot.rect.y1.min(*y1) - mot.rect.y0.max(*y0);
             let contient = c >= *y0 && c <= *y1;
-            let petit = hauteur(mot) < 0.8 * (y1 - y0);
+            // « Petit » : plus bas ET d'une police plus petite que la référence ; un mot de
+            // même police au rectangle gonflé (glyphe spécial) ne doit rien absorber.
+            let petit = ponctuation(mot) || (hauteur(mot) < 0.8 * (y1 - y0) && mot.taille <= 0.8 * taille);
             if (contient || (petit && chevauchement > 0.0))
                 && meilleur.is_none_or(|(_, m)| chevauchement > m)
             {
@@ -92,12 +100,12 @@ pub fn regrouper_en_lignes(mots: &[Mot]) -> Vec<Ligne> {
             }
         }
         match meilleur {
-            Some((i, _)) => groupes[i].2.push(mot.clone()),
-            None => groupes.push((mot.rect.y0, mot.rect.y1, vec![mot.clone()])),
+            Some((i, _)) => groupes[i].3.push(mot.clone()),
+            None => groupes.push((mot.rect.y0, mot.rect.y1, mot.taille, vec![mot.clone()])),
         }
     }
     groupes.sort_by(|a, b| (a.0 + a.1).total_cmp(&(b.0 + b.1)));
-    groupes.into_iter().map(|(_, _, m)| construire_ligne(m)).collect()
+    groupes.into_iter().map(|(_, _, _, m)| construire_ligne(m)).collect()
 }
 
 fn construire_ligne(mut mots: Vec<Mot>) -> Ligne {
@@ -222,5 +230,49 @@ mod tests {
         assert_eq!(lignes[0].texte(), "un");
         assert_eq!(lignes[1].texte(), "deux7");
         assert_eq!(lignes[1].exposants, vec![1]);
+    }
+
+    #[test]
+    fn ponctuation_haute_ne_fusionne_pas_deux_lignes() {
+        // Cas réel (scan OCR) : un « * » ou un « . » reçoit un rectangle plus haut que
+        // les mots et à cheval sur deux lignes ; il ne doit pas servir de référence.
+        let mots = vec![
+            mot("vriront", 0.10, 0.6779, 0.20, 0.6994, 11.1),
+            mot("un", 0.21, 0.6779, 0.25, 0.6994, 11.1),
+            mot("la", 0.10, 0.7002, 0.13, 0.7216, 11.1),
+            mot("vie.", 0.14, 0.7002, 0.20, 0.7216, 11.1),
+            mot("*", 0.21, 0.6947, 0.22, 0.7221, 13.7),
+            mot("Le", 0.10, 0.7215, 0.13, 0.7430, 11.1),
+            mot("corps", 0.14, 0.7215, 0.20, 0.7430, 11.1),
+        ];
+        let lignes = regrouper_en_lignes(&mots);
+        let textes: Vec<String> = lignes.iter().map(Ligne::texte).collect();
+        assert_eq!(textes, vec!["vriront un", "la vie. *", "Le corps"]);
+
+        let mots = vec![
+            mot("Si", 0.25, 0.3614, 0.29, 0.3938, 16.9),
+            mot("vous", 0.30, 0.3614, 0.39, 0.3938, 16.9),
+            mot(".", 0.47, 0.3739, 0.48, 0.4149, 20.6),
+            mot("vivrez", 0.30, 0.3973, 0.39, 0.4296, 16.9),
+        ];
+        let lignes = regrouper_en_lignes(&mots);
+        let textes: Vec<String> = lignes.iter().map(Ligne::texte).collect();
+        assert_eq!(textes, vec!["Si vous .", "vivrez"]);
+    }
+
+    #[test]
+    fn mot_haut_de_meme_taille_n_absorbe_pas_la_ligne_precedente() {
+        // Cas réel (Calibre) : « pouvoir‑deux » (trait d'union insécable) a un rectangle
+        // plus haut que les autres mots de sa ligne, à la même taille de police ; la
+        // ligne du dessus, qu'il chevauche à peine, ne doit pas s'y rattacher.
+        let mots = vec![
+            mot("plus", 0.10, 0.8484, 0.20, 0.8695, 15.0),
+            mot("grands", 0.21, 0.8484, 0.30, 0.8695, 15.0),
+            mot("vient", 0.10, 0.8711, 0.20, 0.8923, 15.0),
+            mot("pouvoir‑deux", 0.21, 0.8675, 0.40, 0.8966, 15.0),
+        ];
+        let lignes = regrouper_en_lignes(&mots);
+        let textes: Vec<String> = lignes.iter().map(Ligne::texte).collect();
+        assert_eq!(textes, vec!["plus grands", "vient pouvoir‑deux"]);
     }
 }
