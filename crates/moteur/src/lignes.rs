@@ -65,30 +65,39 @@ fn hauteur(m: &Mot) -> f32 {
 }
 
 /// Regroupe les mots en lignes, triées de haut en bas.
+///
+/// Les mots sont traités du plus haut au plus bas (hauteur de rectangle) : le
+/// premier mot d'une ligne en est donc le plus grand, et son rectangle vertical
+/// sert de référence. Un mot rejoint la ligne dont la référence contient son
+/// centre vertical ; un mot nettement plus petit (exposant, ponctuation) peut
+/// aussi la rejoindre par simple chevauchement, la ligne au plus grand
+/// chevauchement l'emportant.
 pub fn regrouper_en_lignes(mots: &[Mot]) -> Vec<Ligne> {
-    let mut tries: Vec<&Mot> = mots.iter().collect();
-    tries.sort_by(|a, b| centre_y(a).total_cmp(&centre_y(b)));
+    let mut ordre: Vec<&Mot> = mots.iter().collect();
+    ordre.sort_by(|a, b| hauteur(b).total_cmp(&hauteur(a)));
 
-    let mut groupes: Vec<Vec<Mot>> = Vec::new();
-    // Rectangle vertical (y0, y1) du plus grand mot de la ligne courante.
-    let mut reference: Option<(f32, f32)> = None;
-    for mot in tries {
+    // (référence y0, référence y1, mots)
+    let mut groupes: Vec<(f32, f32, Vec<Mot>)> = Vec::new();
+    for mot in ordre {
         let c = centre_y(mot);
-        match (reference, groupes.last_mut()) {
-            (Some((y0, y1)), Some(courant)) if c >= y0 && c <= y1 => {
-                if hauteur(mot) > y1 - y0 {
-                    reference = Some((mot.rect.y0, mot.rect.y1));
-                }
-                courant.push(mot.clone());
-            }
-            _ => {
-                reference = Some((mot.rect.y0, mot.rect.y1));
-                groupes.push(vec![mot.clone()]);
+        let mut meilleur: Option<(usize, f32)> = None;
+        for (i, (y0, y1, _)) in groupes.iter().enumerate() {
+            let chevauchement = mot.rect.y1.min(*y1) - mot.rect.y0.max(*y0);
+            let contient = c >= *y0 && c <= *y1;
+            let petit = hauteur(mot) < 0.8 * (y1 - y0);
+            if (contient || (petit && chevauchement > 0.0))
+                && meilleur.is_none_or(|(_, m)| chevauchement > m)
+            {
+                meilleur = Some((i, chevauchement));
             }
         }
+        match meilleur {
+            Some((i, _)) => groupes[i].2.push(mot.clone()),
+            None => groupes.push((mot.rect.y0, mot.rect.y1, vec![mot.clone()])),
+        }
     }
-
-    groupes.into_iter().map(construire_ligne).collect()
+    groupes.sort_by(|a, b| (a.0 + a.1).total_cmp(&(b.0 + b.1)));
+    groupes.into_iter().map(|(_, _, m)| construire_ligne(m)).collect()
 }
 
 fn construire_ligne(mut mots: Vec<Mot>) -> Ligne {
@@ -186,5 +195,32 @@ mod tests {
         ];
         let lignes = regrouper_en_lignes(&mots);
         assert!(lignes[0].exposants.is_empty());
+    }
+
+    #[test]
+    fn exposant_dont_le_centre_depasse_le_haut_du_corps_reste_sur_sa_ligne() {
+        let mots = vec![
+            mot("texte", 0.10, 0.100, 0.20, 0.120, 12.0),
+            mot("3", 0.20, 0.090, 0.21, 0.105, 7.0),
+        ];
+        let lignes = regrouper_en_lignes(&mots);
+        assert_eq!(lignes.len(), 1);
+        assert_eq!(lignes[0].exposants, vec![1]);
+        assert_eq!(lignes[0].texte(), "texte3");
+    }
+
+    #[test]
+    fn exposant_de_la_ligne_2_ne_s_attache_pas_a_la_ligne_1() {
+        let mots = vec![
+            mot("un", 0.10, 0.100, 0.20, 0.120, 12.0),
+            mot("deux", 0.10, 0.122, 0.20, 0.142, 12.0),
+            // chevauche un peu la ligne 1 mais surtout la ligne 2
+            mot("7", 0.20, 0.118, 0.21, 0.132, 7.0),
+        ];
+        let lignes = regrouper_en_lignes(&mots);
+        assert_eq!(lignes.len(), 2);
+        assert_eq!(lignes[0].texte(), "un");
+        assert_eq!(lignes[1].texte(), "deux7");
+        assert_eq!(lignes[1].exposants, vec![1]);
     }
 }
