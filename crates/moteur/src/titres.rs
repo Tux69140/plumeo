@@ -158,7 +158,7 @@ fn titres_depuis_signets(
                 let (position, ancre) = match existant {
                     Some(i) => (i, blocs[i].ancre()),
                     None => (
-                        blocs.len(),
+                        blocs.iter().position(|b| b.ancre().page > signet.page).unwrap_or(blocs.len()),
                         Ancre { page: signet.page, moitie: Moitie::Entiere, rect: [0, 0, 1000, 1000] },
                     ),
                 };
@@ -203,8 +203,10 @@ fn titres_depuis_signets(
     (resultat, points)
 }
 
-/// Premier paragraphe de `page` dont le texte normalisé commence par `cible` ou en est
-/// le début ; dans ce cas, avale les paragraphes suivants jusqu'à couvrir le titre.
+/// Cherche le paragraphe (ou la suite de paragraphes) qui porte le titre du signet sur
+/// `page` ou la suivante. Les correspondances s'arrêtent à une frontière de mot ; une
+/// correspondance exacte est préférée à une simple correspondance de début ; un résultat
+/// qui n'est pas court (plus de 12 mots ou 3 lignes) est refusé.
 fn chercher_signet(
     blocs: &[Bloc],
     cible: &str,
@@ -215,29 +217,43 @@ fn chercher_signet(
     let libre = |i: usize| {
         !utilises.contains(&i) && matches!(blocs[i], Bloc::Paragraphe(_)) && !est_sommaire(&blocs[i], pages_som)
     };
-    'debut: for debut in 0..blocs.len() {
-        if blocs[debut].ancre().page != page || !libre(debut) {
-            continue;
-        }
-        let mut textes: Vec<String> = Vec::new();
-        let mut fin = debut;
-        loop {
-            let Bloc::Paragraphe(p) = &blocs[fin] else { continue 'debut };
-            textes.push(p.texte_brut().trim().to_string());
-            fin += 1;
-            let norm = normaliser(&textes.join(" "));
-            if norm.is_empty() {
-                continue 'debut;
+    let mut premier_prefixe = None;
+    for page_cherchee in [page, page + 1] {
+        for debut in 0..blocs.len() {
+            if blocs[debut].ancre().page != page_cherchee || !libre(debut) {
+                continue;
             }
-            if norm.starts_with(cible) {
-                return Some((debut, fin, textes.join(" ")));
-            }
-            if !cible.starts_with(&norm) || fin >= blocs.len() || !libre(fin) {
-                continue 'debut;
+            let mut textes: Vec<String> = Vec::new();
+            let mut lignes = 0;
+            let mut fin = debut;
+            loop {
+                let Bloc::Paragraphe(p) = &blocs[fin] else { break };
+                textes.push(p.texte_brut().trim().to_string());
+                lignes += p.nb_lignes;
+                fin += 1;
+                let texte = textes.join(" ");
+                let norm = normaliser(&texte);
+                if norm.is_empty() {
+                    break;
+                }
+                let court = nb_mots(&texte) <= MAX_MOTS_TITRE && lignes <= MAX_LIGNES_TITRE;
+                if norm == cible && court {
+                    return Some((debut, fin, texte));
+                }
+                if norm.strip_prefix(cible).is_some_and(|reste| reste.starts_with(' ')) {
+                    if court && premier_prefixe.is_none() {
+                        premier_prefixe = Some((debut, fin, texte));
+                    }
+                    break;
+                }
+                let debut_du_titre = cible.strip_prefix(norm.as_str()).is_some_and(|r| r.starts_with(' '));
+                if !debut_du_titre || fin >= blocs.len() || !libre(fin) {
+                    break;
+                }
             }
         }
     }
-    None
+    premier_prefixe
 }
 
 /// Transforme en titres les paragraphes retenus par `candidat`, niveaux par taille.
@@ -473,6 +489,43 @@ mod tests {
         assert_eq!(points.len(), 1);
         assert_eq!(points[0].genre, GenrePoint::TitreSuspect);
         assert!(points[0].message.contains("Épilogue") && points[0].message.contains('6'));
+    }
+
+    #[test]
+    fn signet_court_ne_avale_pas_le_corps() {
+        let blocs = vec![corps(3, "Il était une fois un livre très long."), corps(3, &texte_long())];
+        let (blocs, points, _) = detecter_titres(blocs, &[signet("I", 1, 3)], 100, SourceTitres::Signets);
+        assert!(matches!(&blocs[0], Bloc::Titre { texte, .. } if texte == "I"));
+        assert!(matches!(blocs[1], Bloc::Paragraphe(_)));
+        assert_eq!(points.len(), 1);
+    }
+
+    #[test]
+    fn signet_refuse_un_long_paragraphe() {
+        let long = format!("Introduction de la méthode {}", vec!["mot"; 20].join(" "));
+        let blocs = vec![para(3, &long, 12.0, false, 2)];
+        let (blocs, points, _) = detecter_titres(blocs, &[signet("Introduction", 1, 3)], 100, SourceTitres::Signets);
+        assert!(matches!(&blocs[0], Bloc::Titre { texte, .. } if texte == "Introduction"));
+        assert!(matches!(blocs[1], Bloc::Paragraphe(_)));
+        assert_eq!(points.len(), 1);
+    }
+
+    #[test]
+    fn signet_prefere_la_correspondance_exacte() {
+        let blocs = vec![para(3, "Introduction générale", 12.0, false, 1), para(3, "Introduction", 12.0, false, 1)];
+        let (blocs, points, _) = detecter_titres(blocs, &[signet("Introduction", 1, 3)], 100, SourceTitres::Signets);
+        assert!(matches!(&blocs[0], Bloc::Paragraphe(_)));
+        assert!(matches!(&blocs[1], Bloc::Titre { texte, .. } if texte == "Introduction"));
+        assert!(points.is_empty());
+    }
+
+    #[test]
+    fn signet_page_vide_insere_avant_la_page_suivante() {
+        let blocs = vec![corps(3, &texte_long()), corps(5, &texte_long())];
+        let (blocs, _, _) = detecter_titres(blocs, &[signet("Partie", 1, 4)], 100, SourceTitres::Signets);
+        assert!(matches!(blocs[0], Bloc::Paragraphe(_)));
+        assert!(matches!(&blocs[1], Bloc::Titre { ancre, .. } if ancre.page == 4 && ancre.rect == [0, 0, 1000, 1000]));
+        assert!(matches!(blocs[2], Bloc::Paragraphe(_)));
     }
 
     #[test]
