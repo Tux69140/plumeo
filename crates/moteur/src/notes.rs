@@ -244,7 +244,16 @@ fn est_debut_de_section(b: &Bloc) -> bool {
 /// Sépare le marqueur de début d'un paragraphe de note regroupée.
 fn extraire_marqueur(segments: &[Segment]) -> Option<(String, Vec<Segment>)> {
     match segments.first()? {
-        Segment::Exposant(m) if APPEL.is_match(m) => Some((m.clone(), segments[1..].to_vec())),
+        Segment::Exposant(m) if APPEL.is_match(m) => {
+            let mut suite = segments[1..].to_vec();
+            if let Some(Segment::Texte { texte, .. }) = suite.first_mut() {
+                *texte = texte.trim_start().to_string();
+                if texte.is_empty() {
+                    suite.remove(0);
+                }
+            }
+            Some((m.clone(), suite))
+        }
         Segment::Texte { texte, gras, italique } => {
             let m = DEBUT_NOTE.captures(texte)?[1].to_string();
             let reste = texte[m.len()..].trim_start_matches(['.', ')']).trim_start().to_string();
@@ -602,7 +611,20 @@ mod tests {
         assert_eq!(retraits.len(), 1);
         assert_eq!(texte_note(&blocs[1]), "Début fin de la note");
         let Bloc::Paragraphe(p) = &blocs[2] else { panic!() };
-        assert_eq!(p.texte_brut(), "7  Sans appel");
+        assert_eq!(p.texte_brut(), "7 Sans appel");
         assert_eq!(points.len(), 1);
+    }
+
+    #[test]
+    fn note_regroupee_a_marqueur_exposant_sans_espace_en_tete() {
+        let mut et = Etiqueteuse::new();
+        let blocs = vec![
+            bloc_para(vec![texte("Mot"), Segment::Exposant("7".into())], 1, 0.2),
+            titre("Notes", 2, 2),
+            bloc_para(vec![Segment::Exposant("7".into()), texte(" Texte sept")], 2, 0.2),
+        ];
+        let (blocs, _, points) = notes_regroupees(blocs, &mut et);
+        assert!(points.is_empty());
+        assert_eq!(texte_note(&blocs[1]), "Texte sept");
     }
 }
