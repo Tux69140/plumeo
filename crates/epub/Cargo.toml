@@ -1,0 +1,13 @@
+[package]
+name = "plumeo-epub"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
+thiserror = "2"
+
+[dev-dependencies]
+roxmltree = "0.21"
+tempfile = "3"
