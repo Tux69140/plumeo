@@ -39,6 +39,10 @@ static NUMERO_PAGE: LazyLock<Regex> = LazyLock::new(|| {
     .expect("motif de numéro de page valide")
 });
 
+/// Un « numéro » plus grand que le texte de la page d'au moins cet écart (en points)
+/// est un numéro de chapitre, pas un numéro de page.
+const ECART_NUMERO_CHAPITRE: f32 = 1.5;
+
 pub fn classer_lignes(page: &Page, lignes: Vec<Ligne>, zones: &Zones) -> PageClassee {
     let mut resultat = PageClassee {
         corps: Vec::new(),
@@ -63,7 +67,10 @@ pub fn classer_lignes(page: &Page, lignes: Vec<Ligne>, zones: &Zones) -> PageCla
             resultat.corps.push(ligne);
         }
     }
-    // Numéro résiduel : première ou dernière ligne du corps seulement.
+    // Numéro résiduel : première ou dernière ligne du corps seulement, et pas plus
+    // grande que le texte de la page (sinon c'est un numéro de chapitre).
+    let taille_texte = mediane(resultat.corps.iter().map(Ligne::taille).collect());
+    let est_numero = |ligne: &Ligne| est_numero_page(&ligne.texte()) && ligne.taille() < taille_texte + ECART_NUMERO_CHAPITRE;
     if resultat.corps.last().is_some_and(est_numero) {
         let ligne = resultat.corps.pop().expect("corps non vide");
         resultat.retraits.push(retirer(&ligne, Role::NumeroPage));
@@ -77,8 +84,17 @@ pub fn classer_lignes(page: &Page, lignes: Vec<Ligne>, zones: &Zones) -> PageCla
     resultat
 }
 
-fn est_numero(ligne: &Ligne) -> bool {
-    NUMERO_PAGE.is_match(&ligne.texte())
+fn mediane(mut valeurs: Vec<f32>) -> f32 {
+    if valeurs.is_empty() {
+        return 0.0;
+    }
+    valeurs.sort_by(|a, b| a.total_cmp(b));
+    valeurs[valeurs.len() / 2]
+}
+
+/// Le texte entier est-il un numéro de page (« 12 », « - 12 - », « 92 93 », « Page 3 de 9 »…) ?
+pub fn est_numero_page(texte: &str) -> bool {
+    NUMERO_PAGE.is_match(texte)
 }
 
 #[cfg(test)]
@@ -141,6 +157,18 @@ mod tests {
         let lignes = vec![ligne("texte", 0.4), ligne("12 juin 1924", 0.8)];
         let r = classer_lignes(&page(), lignes, &zones);
         assert_eq!(r.corps.len(), 2);
+        assert!(r.retraits.is_empty());
+        assert!(!r.numero_residuel);
+    }
+
+    #[test]
+    fn numero_de_chapitre_plus_grand_que_le_texte_garde() {
+        // Calibre : le numéro de chapitre « 1 », en 19,4 pt au-dessus d'un texte en 15 pt.
+        let mut numero = ligne("1", 0.12);
+        numero.mots[0].taille = 19.4;
+        let lignes = vec![numero, ligne("VISITE À PATMOS", 0.17), ligne("Aujourd'hui je voudrais", 0.25)];
+        let r = classer_lignes(&page(), lignes, &Zones::default());
+        assert_eq!(r.corps.len(), 3);
         assert!(r.retraits.is_empty());
         assert!(!r.numero_residuel);
     }
