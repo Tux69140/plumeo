@@ -71,3 +71,15 @@ fn rend_une_page_en_png() {
     let png = doc.rendre_png(1, 300).unwrap();
     assert!(png.starts_with(b"\x89PNG"));
 }
+
+#[test]
+fn tiret_de_fin_de_ligne_conserve() {
+    // pdfium rend le tiret qui termine une ligne par le caractère de contrôle \u{2} :
+    // il ne doit pas être pris pour une espace.
+    let t = |y_pt, texte| TexteFixture { x_pt: 72.0, y_pt, texte, taille: 12.0, style: StyleFixture::Normal };
+    let pdf = fabriquer_pdf(&[&[t(100.0, "Un mer-"), t(114.0, "veilleux jour")]]);
+    let doc = DocumentPdf::ouvrir(&pdf).unwrap();
+    let p = doc.page(1).unwrap();
+    let textes: Vec<_> = p.mots.iter().map(|m| m.texte.as_str()).collect();
+    assert_eq!(textes, ["Un", "mer-", "veilleux", "jour"]);
+}

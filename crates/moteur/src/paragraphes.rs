@@ -60,8 +60,39 @@ fn finit_par_cesure(texte: &str) -> bool {
     matches!((it.next(), it.next()), (Some(t), Some(c)) if est_tiret(t) && c.is_alphabetic())
 }
 
-fn commence_par_minuscule(texte: &str) -> bool {
-    texte.chars().next().is_some_and(char::is_lowercase)
+/// Mots qui suivent le trait d'union des mots composés courants (« dites-vous »,
+/// « celle-ci », « peut-être », « dit-il ») : le tiret de fin de ligne est alors gardé.
+const SUITES_DE_TRAIT_D_UNION: [&str; 31] = [
+    "je", "tu", "il", "ils", "elle", "elles", "on", "nous", "vous", "le", "la", "les", "lui", "leur",
+    "leurs", "moi", "toi", "soi", "y", "en", "ce", "ci", "là", "même", "mêmes", "t", "être", "dessus",
+    "dessous", "bas", "haut",
+];
+
+/// Jonction d'un texte qui finit par un tiret de fin de ligne avec la suite.
+enum Cesure {
+    /// Césure : le tiret disparaît, les deux morceaux sont collés.
+    Recoller,
+    /// Trait d'union d'un mot composé : le tiret reste, sans espace après.
+    GarderTiret,
+}
+
+fn cesure(avant: &str, suite: &str) -> Option<Cesure> {
+    if !finit_par_cesure(avant) {
+        return None;
+    }
+    let premier = suite.chars().next()?;
+    if premier.is_uppercase() {
+        return Some(Cesure::GarderTiret);
+    }
+    if !premier.is_lowercase() {
+        return None;
+    }
+    let mot: String = suite.chars().take_while(|c| c.is_alphabetic()).collect();
+    if SUITES_DE_TRAIT_D_UNION.contains(&mot.as_str()) {
+        Some(Cesure::GarderTiret)
+    } else {
+        Some(Cesure::Recoller)
+    }
 }
 
 /// Ajoute du texte aux segments, en fusionnant avec le segment précédent s'il a le même style.
@@ -102,12 +133,15 @@ pub(crate) fn segments_des_lignes(lignes: &[Ligne]) -> Vec<Segment> {
         if let (Some(suivante), Some(dernier)) = (lignes.get(n + 1), ligne.mots.last()) {
             if dernier.texte.ends_with('\u{AD}') {
                 espace_en_tete = false;
-            } else if finit_par_cesure(&dernier.texte)
-                && !ligne.exposants.contains(&(ligne.mots.len() - 1))
-                && commence_par_minuscule(&suivante.texte())
-            {
-                retirer_dernier_caractere(&mut segments);
-                espace_en_tete = false;
+            } else if !ligne.exposants.contains(&(ligne.mots.len() - 1)) {
+                match cesure(&dernier.texte, &suivante.texte()) {
+                    Some(Cesure::Recoller) => {
+                        retirer_dernier_caractere(&mut segments);
+                        espace_en_tete = false;
+                    }
+                    Some(Cesure::GarderTiret) => espace_en_tete = false,
+                    None => {}
+                }
             }
         }
     }
@@ -164,11 +198,14 @@ fn dernier_caractere_de_texte(segments: &[Segment]) -> Option<char> {
 
 /// Colle `suite` à `p` (paragraphe coupé par un saut de page).
 fn fusionner(p: &mut Paragraphe, suite: Paragraphe) {
-    let cesure = finit_par_cesure(&p.texte_brut())
-        && matches!(p.segments.last(), Some(Segment::Texte { .. }))
-        && commence_par_minuscule(&suite.texte_brut());
-    if cesure {
-        retirer_dernier_caractere(&mut p.segments);
+    let jonction = match p.segments.last() {
+        Some(Segment::Texte { .. }) => cesure(&p.texte_brut(), &suite.texte_brut()),
+        _ => None,
+    };
+    if let Some(jonction) = jonction {
+        if matches!(jonction, Cesure::Recoller) {
+            retirer_dernier_caractere(&mut p.segments);
+        }
     } else {
         let (gras, italique) = match p.segments.last() {
             Some(Segment::Texte { gras, italique, .. }) => (*gras, *italique),
@@ -313,9 +350,24 @@ mod tests {
         let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC);
         assert_eq!(textes(&p), vec!["merveilleux"]);
 
-        let lignes = vec![ligne("peut-", 0.1, 0.9, 0.10), ligne("Être", 0.1, 0.9, 0.13)];
+        let lignes = vec![ligne("Saint-", 0.1, 0.9, 0.10), ligne("Esprit", 0.1, 0.9, 0.13)];
         let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC);
-        assert_eq!(textes(&p), vec!["peut- Être"]);
+        assert_eq!(textes(&p), vec!["Saint-Esprit"]);
+    }
+
+    #[test]
+    fn trait_d_union_des_mots_composes_garde() {
+        for (avant, apres, attendu) in [
+            ("concentrez-", "vous", "concentrez-vous"),
+            ("moment-", "là,", "moment-là,"),
+            ("applique-", "t-on", "applique-t-on"),
+            ("lui-", "même", "lui-même"),
+            ("peut-", "être", "peut-être"),
+        ] {
+            let lignes = vec![ligne(avant, 0.1, 0.9, 0.10), ligne(apres, 0.1, 0.9, 0.13)];
+            let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC);
+            assert_eq!(textes(&p), vec![attendu]);
+        }
     }
 
     #[test]
@@ -428,6 +480,10 @@ mod tests {
         let blocs = vec![para("mer-", 4, 0.8), para("veilleux", 5, 0.1)];
         let r = raccorder_pages(blocs);
         assert_eq!(texte_de(&r[0]), "merveilleux");
+        let blocs = vec![para("dites-", 4, 0.8), para("vous bien", 5, 0.1)];
+        assert_eq!(texte_de(&raccorder_pages(blocs)[0]), "dites-vous bien");
+        let blocs = vec![para("le Saint-", 4, 0.8), para("Esprit", 5, 0.1)];
+        assert_eq!(texte_de(&raccorder_pages(blocs)[0]), "le Saint-Esprit");
     }
 
     #[test]

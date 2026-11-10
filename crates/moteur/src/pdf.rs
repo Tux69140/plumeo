@@ -11,6 +11,8 @@ use crate::modele::{ErreurMoteur, MetaPdf, Moitie, Mot, Page, Rect, Signet};
 
 const TOLERANCE_TAILLE: f32 = 0.5;
 const SEUIL_ECART: f32 = 0.25;
+/// pdfium remplace le tiret qui termine une ligne par ce caractère de contrôle.
+const TIRET_FIN_DE_LIGNE: char = '\u{2}';
 
 static PDFIUM: OnceLock<Result<Pdfium, String>> = OnceLock::new();
 
@@ -82,7 +84,13 @@ impl DocumentPdf {
         let texte = page.text().map_err(|e| ErreurMoteur::Page(numero, e.to_string()))?;
         let mut assembleur = Assembleur::new(largeur, hauteur);
         for c in texte.chars().iter() {
-            let Some(ch) = c.unicode_char() else { continue };
+            let Some(mut ch) = c.unicode_char() else { continue };
+            if ch == TIRET_FIN_DE_LIGNE {
+                if assembleur.tiret_de_fin_de_ligne() {
+                    continue;
+                }
+                ch = '-';
+            }
             if ch.is_whitespace() || ch.is_control() {
                 assembleur.espace();
                 continue;
@@ -224,6 +232,16 @@ impl Assembleur {
     fn espace(&mut self) {
         self.cloturer();
         self.espace_en_attente = true;
+    }
+
+    /// Rend au mot en cours le tiret de fin de ligne ; la ligne suivante commence un
+    /// autre mot. Faux s'il n'y a pas de mot en cours (le tiret est alors un caractère
+    /// ordinaire).
+    fn tiret_de_fin_de_ligne(&mut self) -> bool {
+        let Some(mot) = &mut self.en_cours else { return false };
+        mot.texte.push('-');
+        self.espace();
+        true
     }
 
     fn cloturer(&mut self) {
