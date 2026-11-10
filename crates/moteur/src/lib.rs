@@ -2,9 +2,11 @@
 
 #[cfg(feature = "fixtures")]
 pub mod fixtures;
+pub mod blocs;
 pub mod double_page;
 pub mod lignes;
 pub mod modele;
+pub mod paragraphes;
 pub mod pdf;
 pub mod reglages;
 pub mod zones;
