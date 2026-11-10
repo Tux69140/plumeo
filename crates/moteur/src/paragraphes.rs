@@ -78,7 +78,7 @@ fn ajouter_texte(segments: &mut Vec<Segment>, texte: &str, gras: bool, italique:
     segments.push(Segment::Texte { texte: texte.to_string(), gras, italique });
 }
 
-fn segments_des_lignes(lignes: &[Ligne]) -> Vec<Segment> {
+pub(crate) fn segments_des_lignes(lignes: &[Ligne]) -> Vec<Segment> {
     let mut segments: Vec<Segment> = Vec::new();
     // Séparateur à placer devant le premier mot de la ligne courante.
     let mut espace_en_tete = false;

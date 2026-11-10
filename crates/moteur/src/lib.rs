@@ -6,6 +6,7 @@ pub mod blocs;
 pub mod double_page;
 pub mod lignes;
 pub mod modele;
+pub mod notes;
 pub mod paragraphes;
 pub mod pdf;
 pub mod points;
