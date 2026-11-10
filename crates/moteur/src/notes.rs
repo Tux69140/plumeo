@@ -86,8 +86,40 @@ impl NoteEnAttente {
     }
 }
 
-/// Appelle `apparier` pour chaque appel de note des segments (exposant ou `*` collé
-/// à un mot) ; s'il renvoie une étiquette, l'appel devient `AppelNote`.
+/// Ponctuation après laquelle un « * » peut être un appel de note.
+const AVANT_ETOILE: [char; 10] = ['.', ',', ';', ':', '!', '?', '\u{BB}', ')', '"', '\u{2019}'];
+
+/// Fin (exclue) de l'appel de note qui commence à `k`, s'il y en a un :
+/// - 1 à 3 « * » après une lettre ou une ponctuation finale, collés ou séparés par une espace ;
+/// - 1 à 3 chiffres collés à un mot d'au moins deux lettres finissant par une minuscule
+///   (exposant lu comme un chiffre par l'OCR : « Hartmann2 »).
+///
+/// L'appel n'est jamais suivi d'une lettre ou d'un chiffre.
+fn fin_d_appel(c: &[char], k: usize) -> Option<usize> {
+    let lettre = |i: usize| c.get(i).is_some_and(|x| x.is_alphabetic());
+    let (e, permis) = if c[k] == '*' {
+        let e = (k..c.len()).find(|&i| c[i] != '*').unwrap_or(c.len());
+        let avant = match k.checked_sub(1).map(|i| (i, c[i])) {
+            Some((i, ' ')) => i.checked_sub(1).map(|j| c[j]),
+            autre => autre.map(|(_, x)| x),
+        };
+        let permis = (k == 0 || c[k - 1] != '*')
+            && e - k <= 3
+            && avant.is_some_and(|x| x.is_alphabetic() || AVANT_ETOILE.contains(&x));
+        (e, permis)
+    } else if c[k].is_ascii_digit() {
+        let e = (k..c.len()).find(|&i| !c[i].is_ascii_digit()).unwrap_or(c.len());
+        let permis = k >= 2 && e - k <= 3 && c[k - 1].is_lowercase() && lettre(k - 2);
+        (e, permis)
+    } else {
+        return None;
+    };
+    (permis && c.get(e).is_none_or(|x| !x.is_alphanumeric())).then_some(e)
+}
+
+/// Appelle `apparier` pour chaque appel de note des segments (exposant, « * » ou
+/// chiffres collés : voir `fin_d_appel`) ; s'il renvoie une étiquette, l'appel
+/// devient `AppelNote`. Sans note correspondante, le texte reste inchangé.
 fn convertir_appels(
     segments: Vec<Segment>,
     apparier: &mut impl FnMut(&str) -> Option<String>,
@@ -104,28 +136,21 @@ fn convertir_appels(
                 let mut courant = String::new();
                 let mut k = 0;
                 while k < c.len() {
-                    if c[k] != '*' {
-                        courant.push(c[k]);
-                        k += 1;
-                        continue;
-                    }
-                    let mut e = k;
-                    while e < c.len() && c[e] == '*' {
-                        e += 1;
-                    }
-                    let colle = k > 0 && c[k - 1].is_alphabetic() && e - k <= 3
-                        && (e == c.len() || !c[e].is_alphanumeric());
-                    let marqueur: String = c[k..e].iter().collect();
-                    match colle.then(|| apparier(&marqueur)).flatten() {
-                        Some(etiquette) => {
+                    if let Some(e) = fin_d_appel(&c, k) {
+                        let marqueur: String = c[k..e].iter().collect();
+                        if let Some(etiquette) = apparier(&marqueur) {
+                            let tete = courant.trim_end().len();
+                            courant.truncate(tete);
                             if !courant.is_empty() {
                                 sortie.push(Segment::Texte { texte: std::mem::take(&mut courant), gras, italique });
                             }
                             sortie.push(Segment::AppelNote { etiquette, marqueur });
+                            k = e;
+                            continue;
                         }
-                        None => courant.push_str(&marqueur),
                     }
-                    k = e;
+                    courant.push(c[k]);
+                    k += 1;
                 }
                 if !courant.is_empty() {
                     sortie.push(Segment::Texte { texte: courant, gras, italique });
@@ -268,6 +293,42 @@ fn extraire_marqueur(segments: &[Segment]) -> Option<(String, Vec<Segment>)> {
     }
 }
 
+static NOTE_SUIVANTE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[.)»]\s+(\d{1,3})\.\s").unwrap());
+
+/// Détache d'un paragraphe de note numérotée les notes suivantes qui y sont restées
+/// collées (« … introduction. 6. Kant : … ») : seul le numéro qui suit le précédent
+/// (n + 1), après une fin de phrase, ouvre une nouvelle note.
+fn notes_enchainees(marqueur: String, segments: Vec<Segment>) -> Vec<(String, Vec<Segment>)> {
+    let mut sortie = Vec::new();
+    let (mut marqueur, mut reste) = (marqueur, segments);
+    while let Ok(numero) = marqueur.parse::<u32>() {
+        let suivant = (numero + 1).to_string();
+        let coupe = reste.iter().enumerate().find_map(|(i, s)| match s {
+            Segment::Texte { texte, .. } => NOTE_SUIVANTE
+                .captures_iter(texte)
+                .find(|c| c[1] == suivant)
+                .map(|c| (i, c.get(1).expect("groupe 1").start(), c.get(0).expect("groupe 0").end())),
+            _ => None,
+        });
+        let Some((i, debut, fin)) = coupe else { break };
+        let Segment::Texte { texte, gras, italique } = reste[i].clone() else { unreachable!() };
+        let mut note: Vec<Segment> = reste[..i].to_vec();
+        let avant = texte[..debut].trim_end();
+        if !avant.is_empty() {
+            note.push(Segment::Texte { texte: avant.to_string(), gras, italique });
+        }
+        let mut suite = Vec::new();
+        if fin < texte.len() {
+            suite.push(Segment::Texte { texte: texte[fin..].to_string(), gras, italique });
+        }
+        suite.extend_from_slice(&reste[i + 1..]);
+        sortie.push((std::mem::replace(&mut marqueur, suivant), note));
+        reste = suite;
+    }
+    sortie.push((marqueur, reste));
+    sortie
+}
+
 enum Element {
     Bloc(Bloc),
     Note(usize),
@@ -308,14 +369,22 @@ pub fn notes_regroupees(
                 elements.push(Element::Bloc(bloc.clone()));
                 continue;
             };
-            if let Some((m, segments)) = extraire_marqueur(&p.segments) {
-                elements.push(Element::Note(notes.len()));
-                notes.push(NoteEnAttente::nouvelle(m, segments, p.ancre, p.clone()));
+            let nouvelles = if let Some((m, segments)) = extraire_marqueur(&p.segments) {
+                notes_enchainees(m, segments)
             } else if let Some(note) = notes.last_mut() {
+                // Suite de la note précédente, qui peut contenir le début de la suivante.
                 note.segments.push(Segment::Texte { texte: " ".into(), gras: false, italique: false });
                 note.segments.extend(p.segments.iter().cloned());
+                let mut parties = notes_enchainees(note.marqueur.clone(), std::mem::take(&mut note.segments));
+                note.segments = parties.remove(0).1;
+                parties
             } else {
                 elements.push(Element::Bloc(bloc.clone()));
+                Vec::new()
+            };
+            for (m, segments) in nouvelles {
+                elements.push(Element::Note(notes.len()));
+                notes.push(NoteEnAttente::nouvelle(m, segments, p.ancre, p.clone()));
             }
         }
 
@@ -467,6 +536,48 @@ mod tests {
     }
 
     #[test]
+    fn appel_etoile_apres_ponctuation_et_espace() {
+        // Scan OCR : l'appel « * » suit un point, séparé par une espace.
+        let mut et = Etiqueteuse::new();
+        let p = para(vec![texte("le corps éthérique. * Le corps")], 36, 0.2);
+        let (blocs, points) =
+            notes_bas_de_page(vec![p], &[ligne("* Lire la conférence", 0.9)], 36, Moitie::Entiere, &mut et);
+        assert!(points.is_empty());
+        let Bloc::Paragraphe(p) = &blocs[0] else { panic!() };
+        assert_eq!(
+            p.segments,
+            vec![
+                texte("le corps éthérique."),
+                Segment::AppelNote { etiquette: "1-*".into(), marqueur: "*".into() },
+                texte(" Le corps"),
+            ]
+        );
+    }
+
+    #[test]
+    fn appel_en_chiffres_colles_au_mot() {
+        // Scan OCR : l'exposant est lu comme un chiffre collé au mot (« Hartmann2 »).
+        let mut et = Etiqueteuse::new();
+        let blocs = vec![
+            bloc_para(vec![texte("pour Hartmann2 la vérité, le CO2 et 1923.")], 8, 0.2),
+            titre("Notes", 2, 91),
+            bloc_para(vec![texte("2. Edouard von Hartmann (1842-1906).")], 91, 0.2),
+        ];
+        let (blocs, _, points) = notes_regroupees(blocs, &mut et);
+        assert!(points.is_empty());
+        let Bloc::Paragraphe(p) = &blocs[0] else { panic!() };
+        assert_eq!(
+            p.segments,
+            vec![
+                texte("pour Hartmann"),
+                Segment::AppelNote { etiquette: "1-2".into(), marqueur: "2".into() },
+                texte(" la vérité, le CO2 et 1923."),
+            ]
+        );
+        assert_eq!(texte_note(&blocs[1]), "Edouard von Hartmann (1842-1906).");
+    }
+
+    #[test]
     fn etoile_collee_sans_note_reste_du_texte() {
         let mut et = Etiqueteuse::new();
         let p = para(vec![texte("un double* mot")], 3, 0.2);
@@ -613,6 +724,39 @@ mod tests {
         let Bloc::Paragraphe(p) = &blocs[2] else { panic!() };
         assert_eq!(p.texte_brut(), "7 Sans appel");
         assert_eq!(points.len(), 1);
+    }
+
+    #[test]
+    fn notes_regroupees_enchainees_dans_un_paragraphe() {
+        // Scan : deux notes numérotées sans retrait ni blanc entre elles forment un seul
+        // paragraphe ; la note suivante (numéro + 1) en est détachée.
+        let mut et = Etiqueteuse::new();
+        let blocs = vec![
+            bloc_para(
+                vec![texte("Kant"), Segment::Exposant("5".into()), texte(" et Kant"), Segment::Exposant("6".into())],
+                1,
+                0.2,
+            ),
+            titre("Notes", 2, 2),
+            bloc_para(vec![texte("5. Kant (1724-1804); «Critique», introduction. 6. Kant: voir note 5.")], 2, 0.2),
+        ];
+        let (blocs, _, points) = notes_regroupees(blocs, &mut et);
+        assert!(points.is_empty());
+        assert_eq!(blocs.len(), 3);
+        assert_eq!(texte_note(&blocs[1]), "Kant (1724-1804); «Critique», introduction.");
+        assert_eq!(texte_note(&blocs[2]), "Kant: voir note 5.");
+
+        // La note suivante peut aussi arriver dans un paragraphe de suite (retrait suspendu).
+        let blocs = vec![
+            bloc_para(vec![texte("Wolff"), Segment::Exposant("3".into()), texte(" et Hume"), Segment::Exposant("4".into())], 1, 0.2),
+            titre("Notes", 2, 2),
+            bloc_para(vec![texte("3. Christian Wolff, «Philosophia rationalis sive")], 2, 0.2),
+            bloc_para(vec![texte("logica» 1728. 4. David Hume, 1739.")], 2, 0.3),
+        ];
+        let (blocs, _, points) = notes_regroupees(blocs, &mut et);
+        assert!(points.is_empty());
+        assert_eq!(texte_note(&blocs[1]), "Christian Wolff, «Philosophia rationalis sive logica» 1728.");
+        assert_eq!(texte_note(&blocs[2]), "David Hume, 1739.");
     }
 
     #[test]
