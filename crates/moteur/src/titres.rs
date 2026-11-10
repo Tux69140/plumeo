@@ -2,6 +2,7 @@
 //! et des pages de sommaire d'origine.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::LazyLock;
 
 use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
@@ -16,6 +17,10 @@ const MAX_MOTS_TITRE: usize = 12;
 const MAX_LIGNES_TITRE: usize = 3;
 const ECART_TAILLE_TITRE: f32 = 1.5;
 const MIN_PAGES_TITRE_COURANT: usize = 5;
+/// Écart de taille (pt) en deçà duquel deux titres sont du même niveau.
+const TOLERANCE_NIVEAU: f32 = 1.0;
+/// Nombre de titres à partir duquel une taille (ou le mot « chapitre ») fait un niveau.
+const MIN_TITRES_NIVEAU: usize = 3;
 
 fn arrondi_demi(taille: f32) -> f32 {
     (taille * 2.0).round() / 2.0
@@ -97,10 +102,11 @@ fn candidat_taille(p: &Paragraphe, corps: f32) -> bool {
     p.taille >= corps + ECART_TAILLE_TITRE && court(p, &p.texte_brut())
 }
 
-/// Pages dont la plupart des paragraphes ressemblent à des lignes de sommaire.
+/// Pages dont la plupart des paragraphes ressemblent à des lignes de sommaire : ils
+/// finissent par un numéro de page, après une espace ou des points de conduite. Des
+/// points de suspension au milieu du texte ne suffisent pas.
 fn pages_sommaire(blocs: &[Bloc]) -> BTreeSet<u32> {
-    let fin_numero = Regex::new(r"\s\d{1,4}$").unwrap();
-    let points = Regex::new(r"\.{3,}").unwrap();
+    let fin_numero = Regex::new(r"[\s.\u{2026}]\d{1,4}$").unwrap();
     let mut par_page: BTreeMap<u32, (usize, usize)> = BTreeMap::new();
     for bloc in blocs {
         if let Bloc::Paragraphe(p) = bloc {
@@ -108,7 +114,7 @@ fn pages_sommaire(blocs: &[Bloc]) -> BTreeSet<u32> {
             let texte = texte.trim();
             let compte = par_page.entry(p.ancre.page).or_default();
             compte.0 += 1;
-            if fin_numero.is_match(texte) || points.is_match(texte) {
+            if fin_numero.is_match(texte) {
                 compte.1 += 1;
             }
         }
@@ -205,8 +211,10 @@ fn titres_depuis_signets(
 
 /// Cherche le paragraphe (ou la suite de paragraphes) qui porte le titre du signet sur
 /// `page` ou la suivante. Les correspondances s'arrêtent à une frontière de mot ; une
-/// correspondance exacte est préférée à une simple correspondance de début ; un résultat
-/// qui n'est pas court (plus de 12 mots ou 3 lignes) est refusé.
+/// correspondance exacte est préférée à une simple correspondance de début. Une
+/// correspondance de début qui n'est pas courte (plus de 12 mots ou 3 lignes) est
+/// refusée ; une correspondance exacte ne peut pas avaler le corps du texte et n'a pas
+/// de limite.
 fn chercher_signet(
     blocs: &[Bloc],
     cible: &str,
@@ -237,7 +245,7 @@ fn chercher_signet(
                     break;
                 }
                 let court = nb_mots(&texte) <= MAX_MOTS_TITRE && lignes <= MAX_LIGNES_TITRE;
-                if norm == cible && court {
+                if norm == cible {
                     return Some((debut, fin, texte));
                 }
                 if norm.strip_prefix(cible).is_some_and(|reste| reste.starts_with(' ')) {
@@ -256,41 +264,82 @@ fn chercher_signet(
     premier_prefixe
 }
 
-/// Transforme en titres les paragraphes retenus par `candidat`, niveaux par taille.
+/// Niveaux des titres d'après leur taille. Les tailles voisines (écart ≤ 1 pt, bruit
+/// d'OCR) forment un même groupe ; les groupes sont classés du plus grand au plus
+/// petit. Le premier groupe d'au moins 3 titres donne le niveau 1, et les groupes plus
+/// grands mais plus rares (couverture, schéma) le rejoignent au lieu de le repousser.
+struct NiveauxParTaille {
+    /// (taille minimale, taille maximale, niveau) de chaque groupe.
+    groupes: Vec<(f32, f32, u8)>,
+}
+
+impl NiveauxParTaille {
+    fn mesurer(mut tailles: Vec<f32>) -> Self {
+        tailles.sort_by(|a, b| b.total_cmp(a));
+        let mut groupes: Vec<Vec<f32>> = Vec::new();
+        for t in tailles {
+            match groupes.last_mut() {
+                Some(g) if g.last().is_some_and(|d| d - t <= TOLERANCE_NIVEAU) => g.push(t),
+                _ => groupes.push(vec![t]),
+            }
+        }
+        let premier_frequent = groupes.iter().position(|g| g.len() >= MIN_TITRES_NIVEAU).unwrap_or(0);
+        let groupes = groupes
+            .iter()
+            .enumerate()
+            .map(|(i, g)| {
+                let niveau = (1 + i.saturating_sub(premier_frequent)).min(3) as u8;
+                (*g.last().expect("groupe non vide"), g[0], niveau)
+            })
+            .collect();
+        NiveauxParTaille { groupes }
+    }
+
+    fn niveau(&self, taille: f32) -> u8 {
+        self.groupes
+            .iter()
+            .find(|(min, max, _)| taille >= *min && taille <= *max)
+            .map_or(1, |(_, _, n)| *n)
+    }
+}
+
+/// Titre qui nomme un chapitre : « CHAPITRE III », « PREMIER CHAPITRE ».
+fn nomme_un_chapitre(p: &Paragraphe) -> bool {
+    static CHAPITRE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^(?:\p{L}+ )?chapitre\b").expect("motif valide"));
+    CHAPITRE.is_match(&normaliser(&p.texte_brut()))
+}
+
+/// Transforme en titres les paragraphes retenus par `candidat`. Quand au moins
+/// 3 titres nomment un chapitre, ils forment le niveau 1 et les autres descendent
+/// d'un niveau ; sinon les niveaux suivent la taille.
 fn titres_par_candidats(
     blocs: Vec<Bloc>,
     pages_som: &BTreeSet<u32>,
     candidat: impl Fn(&Paragraphe) -> bool,
 ) -> Vec<Bloc> {
-    let est_candidat = |b: &Bloc| match b {
-        Bloc::Paragraphe(p) => !pages_som.contains(&p.ancre.page) && candidat(p),
-        _ => false,
-    };
-    let mut tailles: Vec<i32> = blocs
+    let est_candidat = |p: &Paragraphe| !pages_som.contains(&p.ancre.page) && candidat(p);
+    let candidats: Vec<&Paragraphe> = blocs
         .iter()
-        .filter(|b| est_candidat(b))
         .filter_map(|b| match b {
-            Bloc::Paragraphe(p) => Some((arrondi_demi(p.taille) * 2.0) as i32),
+            Bloc::Paragraphe(p) if est_candidat(p) => Some(p),
             _ => None,
         })
         .collect();
-    tailles.sort_unstable_by(|a, b| b.cmp(a));
-    tailles.dedup();
+    let par_chapitres = candidats.iter().filter(|p| nomme_un_chapitre(p)).count() >= MIN_TITRES_NIVEAU;
+    let chapitre = |p: &Paragraphe| par_chapitres && nomme_un_chapitre(p);
+    let niveaux = NiveauxParTaille::mesurer(candidats.iter().filter(|p| !chapitre(p)).map(|p| p.taille).collect());
+    let decalage = u8::from(par_chapitres);
 
     blocs
         .into_iter()
-        .map(|b| {
-            if !est_candidat(&b) {
-                return b;
-            }
-            let Bloc::Paragraphe(p) = b else { unreachable!() };
-            let cle = (arrondi_demi(p.taille) * 2.0) as i32;
-            let rang = tailles.iter().position(|t| *t == cle).unwrap_or(0);
-            Bloc::Titre {
-                niveau: (rang + 1).min(3) as u8,
+        .map(|b| match b {
+            Bloc::Paragraphe(p) if est_candidat(&p) => Bloc::Titre {
+                niveau: if chapitre(&p) { 1 } else { (niveaux.niveau(p.taille) + decalage).min(3) },
                 texte: p.texte_brut().trim().to_string(),
                 ancre: p.ancre,
-            }
+            },
+            autre => autre,
         })
         .collect()
 }
@@ -346,12 +395,17 @@ fn titres_courants_suspects(blocs: &[Bloc]) -> Vec<PointAVerifier> {
 
 /// Détecte les titres selon `source` (ou la cascade en mode `Auto`) et les pages de
 /// sommaire. Retourne les blocs, les points à vérifier et la source réellement utilisée.
+/// Les signets d'appel de note (« [12] ») sont ignorés.
 pub fn detecter_titres(
     blocs: Vec<Bloc>,
     signets: &[Signet],
     nb_pages: u32,
     source: SourceTitres,
 ) -> (Vec<Bloc>, Vec<PointAVerifier>, SourceTitres) {
+    // Les signets « [12] » mènent aux notes de fin (Calibre) : ni titres, ni plan.
+    let appel_de_note = Regex::new(r"^\[\d+\]$").unwrap();
+    let signets: Vec<Signet> = signets.iter().filter(|s| !appel_de_note.is_match(s.titre.trim())).cloned().collect();
+    let signets = &signets[..];
     let pages_som = pages_sommaire(&blocs);
     let mut points: Vec<PointAVerifier> = pages_som
         .iter()
@@ -480,6 +534,62 @@ mod tests {
     }
 
     #[test]
+    fn signet_numero_et_titre_sur_trois_lignes() {
+        // Calibre : numéro de chapitre puis titre centré sur trois lignes.
+        let blocs = vec![
+            para(22, "3", 19.4, true, 1),
+            para(22, "MELKHITSÉDEK", 19.4, true, 1),
+            para(22, "ET L’ENSEIGNEMENT", 19.4, true, 1),
+            para(22, "DES DEUX PRINCIPES", 19.4, true, 1),
+            corps(22, &texte_long()),
+        ];
+        let signets = [signet("3. MELKHITSÉDEK ET L’ENSEIGNEMENT DES DEUX PRINCIPES", 1, 22)];
+        let (blocs, points, _) = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
+        assert_eq!(titres(&blocs), vec![(1, "3 MELKHITSÉDEK ET L’ENSEIGNEMENT DES DEUX PRINCIPES".to_string())]);
+        assert_eq!(blocs.len(), 2);
+        assert!(points.is_empty());
+    }
+
+    #[test]
+    fn signet_long_retrouve_a_l_identique() {
+        // Le titre du signet fait 16 mots : la limite de 12 mots ne vaut que pour une
+        // correspondance partielle.
+        let blocs = vec![
+            para(93, "13", 19.4, true, 1),
+            para(93, "LA BÊTE QUI MONTE", 19.4, true, 1),
+            para(93, "DE LA MER ET LA BÊTE", 19.4, true, 1),
+            para(93, "QUI MONTE DE LA TERRE", 19.4, true, 1),
+            corps(93, &texte_long()),
+        ];
+        let signets = [signet("13. LA BÊTE QUI MONTE DE LA MER ET LA BÊTE QUI MONTE DE LA TERRE", 1, 93)];
+        let (blocs, points, _) = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
+        assert_eq!(blocs.len(), 2);
+        assert!(points.is_empty());
+    }
+
+    #[test]
+    fn signets_d_appel_de_note_ignores() {
+        // Calibre : chaque note de fin a son signet « [12] » ; ce ne sont pas des titres.
+        let blocs = vec![
+            para(3, "1. VISITE À PATMOS", 12.0, false, 1),
+            corps(3, &texte_long()),
+            corps(9, "[1] Nom donné en grec à saint Jean."),
+        ];
+        let signets = [
+            signet("1. VISITE À PATMOS", 1, 3),
+            signet("2. INTRODUCTION", 1, 5),
+            signet("3. MELKHITSÉDEK", 1, 7),
+            signet("[1]", 1, 9),
+            signet("[2]", 1, 9),
+        ];
+        let (blocs, points, source) = detecter_titres(blocs, &signets, 100, SourceTitres::Auto);
+        assert_eq!(source, SourceTitres::Signets);
+        let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
+        assert_eq!(t, ["1. VISITE À PATMOS", "2. INTRODUCTION", "3. MELKHITSÉDEK"]);
+        assert!(points.iter().all(|p| !p.message.contains("[1]")));
+    }
+
+    #[test]
     fn signet_introuvable() {
         let blocs = vec![corps(6, &texte_long())];
         let signets = [signet("Épilogue", 1, 6)];
@@ -562,6 +672,53 @@ mod tests {
     }
 
     #[test]
+    fn niveaux_tolerants_aux_tailles_d_ocr_et_aux_grands_titres_isoles() {
+        // Scan OCR : les titres de chapitre varient de 16,2 à 16,9 pt ; la couverture et
+        // un schéma ont des tailles isolées plus grandes, qui ne prennent pas le niveau 1.
+        let mut blocs = vec![
+            para(1, "L'ALCHIMIE", 34.0, false, 1),
+            para(1, "Omraam", 28.6, false, 1),
+            corps(2, &texte_long()),
+        ];
+        for (page, taille) in [(10, 16.5), (29, 16.9), (47, 16.2), (62, 16.4)] {
+            blocs.push(para(page, &format!("Titre de la page {page}"), taille, false, 1));
+            blocs.push(para(page, "(sous-titre)", 14.0, false, 1));
+            blocs.push(corps(page, &texte_long()));
+        }
+        blocs.push(para(65, "Corps astral", 34.1, false, 1));
+        blocs.push(corps(65, &texte_long()));
+        let (blocs, _, _) = detecter_titres(blocs, &[], 70, SourceTitres::Taille);
+        let t = titres(&blocs);
+        let niveau = |texte: &str| t.iter().find(|(_, x)| x == texte).map(|(n, _)| *n);
+        assert_eq!(niveau("Titre de la page 10"), Some(1));
+        assert_eq!(niveau("Titre de la page 29"), Some(1));
+        assert_eq!(niveau("Titre de la page 47"), Some(1));
+        assert_eq!(niveau("L'ALCHIMIE Omraam"), Some(1));
+        assert_eq!(niveau("Corps astral"), Some(1));
+        assert_eq!(t.iter().filter(|(n, x)| *n == 2 && x == "(sous-titre)").count(), 4);
+    }
+
+    #[test]
+    fn titres_chapitre_au_niveau_1() {
+        // Les titres « CHAPITRE … » donnent le niveau 1, même plus petits qu'un autre titre.
+        let mut blocs = vec![para(1, "NOTE DE L'ÉDITEUR:", 22.5, true, 1), corps(1, &texte_long())];
+        for (n, nom) in ["I", "II", "III", "IV"].iter().enumerate() {
+            let page = 10 + n as u32;
+            blocs.push(para(page, &format!("CHAPITRE {nom}"), 15.0, true, 1));
+            blocs.push(corps(page, &texte_long()));
+            blocs.push(para(page, "(2 FÉVRIER 1995)", 15.0, true, 1));
+            blocs.push(corps(page, &texte_long()));
+        }
+        blocs.push(para(20, "PREMIER CHAPITRE", 15.0, true, 1));
+        let (blocs, _, source) = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
+        assert_eq!(source, SourceTitres::GrasMajuscules);
+        let t = titres(&blocs);
+        let n1: Vec<&str> = t.iter().filter(|(n, _)| *n == 1).map(|(_, x)| x.as_str()).collect();
+        assert_eq!(n1, ["CHAPITRE I", "CHAPITRE II", "CHAPITRE III", "CHAPITRE IV", "PREMIER CHAPITRE"]);
+        assert!(t.iter().filter(|(n, _)| *n != 1).all(|(n, _)| *n == 2));
+    }
+
+    #[test]
     fn titres_consecutifs_fusionnes() {
         let blocs = vec![
             corps(1, &texte_long()),
@@ -586,6 +743,21 @@ mod tests {
         let sommaires: Vec<_> = points.iter().filter(|p| p.genre == GenrePoint::Sommaire).collect();
         assert_eq!(sommaires.len(), 1);
         assert_eq!(sommaires[0].ancre.page, 2);
+    }
+
+    #[test]
+    fn points_de_suspension_ne_font_pas_un_sommaire() {
+        let mut blocs = Vec::new();
+        for n in 1..=3 {
+            blocs.push(para(n, &format!("({n} JANVIER 2000)"), 12.0, true, 1));
+            blocs.push(corps(n, &texte_long()));
+        }
+        for _ in 0..4 {
+            blocs.push(corps(2, "Il a dit... puis il est reparti, sans un mot... Voilà."));
+        }
+        let (blocs, points, _) = detecter_titres(blocs, &[], 3, SourceTitres::GrasMajuscules);
+        assert!(points.iter().all(|p| p.genre != GenrePoint::Sommaire));
+        assert_eq!(titres(&blocs).len(), 3);
     }
 
     #[test]
