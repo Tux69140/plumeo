@@ -92,7 +92,7 @@ Conversion en `--release`, epubcheck 5.4.0 : **les 9 EPUB sont valides**, le tes
 | 4 | signets, 23 titres | signets, 23 n1, 0 n2 | 0,6 s |
 | 5 | signets, 4 n1 et 7 n2 | signets, 4 n1, 7 n2 | 0,3 s |
 | 6 | `g` et `d` ; pas de « 92 93 » ; ≥ 1 note appariée | `g` et `d` ; 0 pied résiduel ; 5 notes appariées | 0,2 s |
-| 7 | se convertit ; EPUB valide | 28 n1 ; sommaire pp. 1-2 reconnu ; EPUB valide ; schéma p. 6 en texte (plan 6) | 1,8 s |
+| 7 | se convertit ; EPUB valide | 28 n1 ; sommaire pp. 1-2 reconnu ; médiane 149 ; EPUB valide ; schéma p. 6 en texte (plan 6) | 1,6 s |
 | 8 | 19 n1 « CHAPITRE » ; pas de note p. 145 | 19 n1 « CHAPITRE » ; aucune note | 0,4 s |
 | 9 | ≥ 8 n1 « CHAPITRE » ; pas de note p. 367 ; < 60 s | 9 n1 dont 8 « CHAPITRE … » (+ « PREMIER CHAPITRE ») ; aucune note | 1,8 s |
 
@@ -174,9 +174,16 @@ Chacune a son test unitaire, sans PDF du corpus.
    (f) résumé sans numéros de page (sans signets) : sommaire, et pseudo-signets
    « CHAPITRE n » pour le niveau 1 (n° 2 ; aussi les tables des pp. 1-2 du n° 7 et
    p. 2 du n° 8) ; les nombres 0 à 20 s'écrivent en lettres pour comparer les titres ;
-   (g) un titre candidat répété sur au moins 5 pages est un titre courant : retrait
-   `titre-courant` et point (n° 2, 48 occurrences) ; (h) une date n'est jamais collée
-   à un titre voisin (« (7 MARS 1999) LES ANGES… » au n° 2).
+   (g) titre courant pris dans le texte : un titre candidat qui se trouve **en
+   bordure** (premier ou dernier paragraphe de sa page, ou voisin d'un paragraphe
+   lui-même répété sur 5 pages, comme l'ancien pied de page « S.v.p. n'hésitez pas… »
+   des PDF recomposés) sur au moins 5 pages et 10 % des pages du livre ; « Notes »
+   n'en est jamais un. Retrait `titre-courant` et point (n° 2 : 48 occurrences, en
+   bordure sur 47 pages de 195 ; 38 sont au milieu de la page, juste après l'annonce
+   répétée) ; (h) une date n'est jamais collée
+   à un titre voisin (« (7 MARS 1999) LES ANGES… » au n° 2) ; (i) pas de raccord de
+   paragraphe à travers un saut de page si l'une des deux pages est un sommaire (les
+   lignes du résumé du n° 2 et des tables du n° 7 restent séparées).
 5. **Notes** (`notes.rs`) — (a) appel « * » séparé du mot par une ponctuation et une
    espace (« éthérique. * », n° 3 p. 36) ; (b) appel en chiffres collés au mot,
    exposant lu par l'OCR (« Hartmann2 », n° 6) — seulement si le mot finit par une

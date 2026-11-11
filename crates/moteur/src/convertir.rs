@@ -1,6 +1,8 @@
 //! Conversion d'un livre (ou d'une page) : toutes les étapes du moteur, de la
 //! lecture du PDF au Markdown ancré.
 
+use std::collections::BTreeSet;
+
 use serde::Serialize;
 
 use crate::blocs::{Bloc, Segment};
@@ -124,7 +126,9 @@ pub fn convertir_livre(
     let (blocs, retraits_notes, pts) = notes_regroupees(blocs, &mut etiqueteuse, &vocab);
     retraits.extend(retraits_notes);
     points.extend(pts);
-    let blocs = raccorder_pages(blocs, &vocab);
+    let sommaires: BTreeSet<u32> =
+        points.iter().filter(|p| p.genre == GenrePoint::Sommaire).map(|p| p.ancre.page).collect();
+    let blocs = raccorder_pages(blocs, &vocab, &sommaires);
 
     let nb_notes = blocs.iter().filter(|b| matches!(b, Bloc::Note { .. })).count();
     Ok(Conversion { markdown: ecrire_markdown(&blocs), retraits, points, source_titres, nb_pages, nb_notes })

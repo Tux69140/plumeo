@@ -1,7 +1,7 @@
 //! Regroupement des lignes de corps en paragraphes, recollage des césures et
 //! raccord des paragraphes coupés par un saut de page.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use crate::blocs::{Bloc, Paragraphe, Segment};
 use crate::lignes::Ligne;
@@ -299,8 +299,9 @@ fn fusionner(p: &mut Paragraphe, suite: Paragraphe, vocab: &Vocabulaire) {
 }
 
 /// Raccorde les paragraphes coupés par un saut de page. Les notes situées entre
-/// les deux sont sautées (elles gardent leur place) ; un titre bloque le raccord.
-pub fn raccorder_pages(blocs: Vec<Bloc>, vocab: &Vocabulaire) -> Vec<Bloc> {
+/// les deux sont sautées (elles gardent leur place) ; un titre bloque le raccord,
+/// de même qu'une page de sommaire d'un côté ou de l'autre (ses lignes restent seules).
+pub fn raccorder_pages(blocs: Vec<Bloc>, vocab: &Vocabulaire, pages_sommaire: &BTreeSet<u32>) -> Vec<Bloc> {
     let mut sortie: Vec<Bloc> = Vec::new();
     for bloc in blocs {
         let Bloc::Paragraphe(suite) = bloc else {
@@ -312,7 +313,8 @@ pub fn raccorder_pages(blocs: Vec<Bloc>, vocab: &Vocabulaire) -> Vec<Bloc> {
             let autre_page = (p.ancre.page, p.ancre.moitie) != (suite.ancre.page, suite.ancre.moitie);
             let ouvert = dernier_caractere_de_texte(&p.segments)
                 .is_some_and(|c| !PONCTUATION_FINALE.contains(&c));
-            if autre_page && ouvert && !suite.texte_brut().is_empty() {
+            let sommaire = pages_sommaire.contains(&p.ancre.page) || pages_sommaire.contains(&suite.ancre.page);
+            if autre_page && ouvert && !sommaire && !suite.texte_brut().is_empty() {
                 fusionner(p, suite, vocab);
                 continue;
             }
@@ -525,17 +527,17 @@ mod tests {
     #[test]
     fn raccord_inter_pages() {
         let blocs = vec![para("ce que", 4, 0.8), para("l'on dit", 5, 0.1)];
-        let r = raccorder_pages(blocs, &Vocabulaire::default());
+        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new());
         assert_eq!(r.len(), 1);
         assert_eq!(texte_de(&r[0]), "ce que l'on dit");
         assert_eq!(r[0].ancre().page, 4);
 
         let blocs = vec![para("la fin.", 4, 0.8), para("Suite", 5, 0.1)];
-        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default()).len(), 2);
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new()).len(), 2);
 
         let titre = Bloc::Titre { niveau: 1, texte: "T".into(), ancre: para("", 5, 0.1).ancre() };
         let blocs = vec![para("ce que", 4, 0.8), titre];
-        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default()).len(), 2);
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new()).len(), 2);
     }
 
     #[test]
@@ -547,7 +549,7 @@ mod tests {
             ancre: para("", 4, 0.9).ancre(),
         };
         let blocs = vec![para("ce que", 4, 0.8), note, para("l'on dit", 5, 0.1)];
-        let r = raccorder_pages(blocs, &Vocabulaire::default());
+        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new());
         assert_eq!(r.len(), 2);
         assert_eq!(texte_de(&r[0]), "ce que l'on dit");
         assert!(matches!(r[1], Bloc::Note { .. }));
@@ -564,8 +566,17 @@ mod tests {
     }
 
     #[test]
+    fn pas_de_raccord_avec_une_page_de_sommaire() {
+        let sommaire = BTreeSet::from([6]);
+        let blocs = vec![para("benjamin@exemple.com", 5, 0.8), para("RÉSUMÉ", 6, 0.1)];
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &sommaire).len(), 2);
+        let blocs = vec![para("TRADITION CABALISTIQUE", 6, 0.8), para("CHAPITRE 6:", 7, 0.1)];
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &sommaire).len(), 2);
+    }
+
+    #[test]
     fn raccord_ignore_l_appel_de_note_final() {
-        let r = raccorder_pages(vec![para_avec_fin("la fin.", appel()), para("Suite", 5, 0.1)], &Vocabulaire::default());
+        let r = raccorder_pages(vec![para_avec_fin("la fin.", appel()), para("Suite", 5, 0.1)], &Vocabulaire::default(), &BTreeSet::new());
         assert_eq!(r.len(), 2);
     }
 
@@ -574,13 +585,13 @@ mod tests {
         let r = raccorder_pages(vec![
             para_avec_fin("la fin.", Segment::Exposant("1".into())),
             para("Suite", 5, 0.1),
-        ], &Vocabulaire::default());
+        ], &Vocabulaire::default(), &BTreeSet::new());
         assert_eq!(r.len(), 2);
     }
 
     #[test]
     fn raccord_malgre_un_appel_de_note_apres_un_mot() {
-        let r = raccorder_pages(vec![para_avec_fin("ce que", appel()), para("l'on dit", 5, 0.1)], &Vocabulaire::default());
+        let r = raccorder_pages(vec![para_avec_fin("ce que", appel()), para("l'on dit", 5, 0.1)], &Vocabulaire::default(), &BTreeSet::new());
         assert_eq!(r.len(), 1);
         assert_eq!(texte_de(&r[0]), "ce que1 l'on dit");
     }
@@ -588,18 +599,18 @@ mod tests {
     #[test]
     fn pas_de_raccord_sur_la_meme_page() {
         let blocs = vec![para("ce que", 4, 0.1), para("l'on dit", 4, 0.3)];
-        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default()).len(), 2);
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new()).len(), 2);
     }
 
     #[test]
     fn raccord_recolle_une_cesure() {
         let blocs = vec![para("mer-", 4, 0.8), para("veilleux", 5, 0.1)];
-        let r = raccorder_pages(blocs, &Vocabulaire::default());
+        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new());
         assert_eq!(texte_de(&r[0]), "merveilleux");
         let blocs = vec![para("dites-", 4, 0.8), para("vous bien", 5, 0.1)];
-        assert_eq!(texte_de(&raccorder_pages(blocs, &Vocabulaire::default())[0]), "dites-vous bien");
+        assert_eq!(texte_de(&raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new())[0]), "dites-vous bien");
         let blocs = vec![para("le Saint-", 4, 0.8), para("Esprit", 5, 0.1)];
-        assert_eq!(texte_de(&raccorder_pages(blocs, &Vocabulaire::default())[0]), "le Saint-Esprit");
+        assert_eq!(texte_de(&raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new())[0]), "le Saint-Esprit");
     }
 
     #[test]
