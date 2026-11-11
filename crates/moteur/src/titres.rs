@@ -17,8 +17,10 @@ const MAX_MOTS_TITRE: usize = 12;
 const MAX_LIGNES_TITRE: usize = 3;
 const ECART_TAILLE_TITRE: f32 = 1.5;
 const MIN_PAGES_TITRE_COURANT: usize = 5;
-/// Écart de taille (pt) en deçà duquel deux titres sont du même niveau.
-const TOLERANCE_NIVEAU: f32 = 1.0;
+/// Écart de taille (pt) en deçà duquel deux titres voisins sont du même niveau.
+const TOLERANCE_TAILLE: f32 = 0.5;
+/// Étendue maximale (pt) des tailles d'un même niveau.
+const ETENDUE_NIVEAU: f32 = 1.0;
 /// Nombre de titres à partir duquel une taille (ou le mot « chapitre ») fait un niveau.
 const MIN_TITRES_NIVEAU: usize = 3;
 
@@ -264,24 +266,46 @@ fn chercher_signet(
     premier_prefixe
 }
 
-/// Niveaux des titres d'après leur taille. Les tailles voisines (écart ≤ 1 pt, bruit
-/// d'OCR) forment un même groupe ; les groupes sont classés du plus grand au plus
-/// petit. Le premier groupe d'au moins 3 titres donne le niveau 1, et les groupes plus
-/// grands mais plus rares (couverture, schéma) le rejoignent au lieu de le repousser.
+/// Niveaux des titres d'après leur taille. Les tailles voisines (écart ≤ 0,5 pt, de
+/// proche en proche) forment une chaîne ; une chaîne qui s'étend sur plus d'1 pt est
+/// coupée à son plus grand écart (bruit d'OCR : 16,1 à 16,9 pt restent ensemble). Les
+/// groupes obtenus sont classés du plus grand au plus petit. Le premier groupe d'au
+/// moins 3 titres donne le niveau 1, et les groupes plus grands mais plus rares
+/// (couverture, schéma) le rejoignent au lieu de le repousser.
 struct NiveauxParTaille {
     /// (taille minimale, taille maximale, niveau) de chaque groupe.
     groupes: Vec<(f32, f32, u8)>,
 }
 
+/// Ajoute `chaine` (tailles décroissantes) à `groupes`, coupée à son plus grand écart
+/// tant qu'elle s'étend sur plus de `ETENDUE_NIVEAU`.
+fn couper_au_plus_grand_ecart(chaine: Vec<f32>, groupes: &mut Vec<Vec<f32>>) {
+    if chaine[0] - chaine[chaine.len() - 1] <= ETENDUE_NIVEAU {
+        groupes.push(chaine);
+        return;
+    }
+    let coupe = (1..chaine.len())
+        .max_by(|&a, &b| (chaine[a - 1] - chaine[a]).total_cmp(&(chaine[b - 1] - chaine[b])))
+        .expect("chaîne d'au moins deux tailles");
+    let mut haut = chaine;
+    let bas = haut.split_off(coupe);
+    couper_au_plus_grand_ecart(haut, groupes);
+    couper_au_plus_grand_ecart(bas, groupes);
+}
+
 impl NiveauxParTaille {
     fn mesurer(mut tailles: Vec<f32>) -> Self {
         tailles.sort_by(|a, b| b.total_cmp(a));
-        let mut groupes: Vec<Vec<f32>> = Vec::new();
+        let mut chaines: Vec<Vec<f32>> = Vec::new();
         for t in tailles {
-            match groupes.last_mut() {
-                Some(g) if g.last().is_some_and(|d| d - t <= TOLERANCE_NIVEAU) => g.push(t),
-                _ => groupes.push(vec![t]),
+            match chaines.last_mut() {
+                Some(g) if g.last().is_some_and(|d| d - t <= TOLERANCE_TAILLE) => g.push(t),
+                _ => chaines.push(vec![t]),
             }
+        }
+        let mut groupes: Vec<Vec<f32>> = Vec::new();
+        for chaine in chaines {
+            couper_au_plus_grand_ecart(chaine, &mut groupes);
         }
         let premier_frequent = groupes.iter().position(|g| g.len() >= MIN_TITRES_NIVEAU).unwrap_or(0);
         let groupes = groupes
@@ -696,6 +720,38 @@ mod tests {
         assert_eq!(niveau("L'ALCHIMIE Omraam"), Some(1));
         assert_eq!(niveau("Corps astral"), Some(1));
         assert_eq!(t.iter().filter(|(n, x)| *n == 2 && x == "(sous-titre)").count(), 4);
+    }
+
+    #[test]
+    fn tailles_espacees_d_un_point_font_trois_niveaux() {
+        // Tolérance de taille 0,5 pt : 16, 15 et 14 pt sont trois niveaux distincts.
+        let mut blocs = vec![corps(1, &texte_long())];
+        for page in 2..=4 {
+            for (texte, taille) in [("Partie", 16.0), ("Livre", 15.0), ("Section", 14.0)] {
+                blocs.push(para(page, &format!("{texte} {page}"), taille, false, 1));
+                blocs.push(corps(page, &texte_long()));
+            }
+        }
+        let (blocs, _, _) = detecter_titres(blocs, &[], 4, SourceTitres::Taille);
+        let t = titres(&blocs);
+        let niveau = |texte: &str| t.iter().find(|(_, x)| x == texte).map(|(n, _)| *n);
+        assert_eq!(niveau("Partie 2"), Some(1));
+        assert_eq!(niveau("Livre 3"), Some(2));
+        assert_eq!(niveau("Section 4"), Some(3));
+    }
+
+    #[test]
+    fn groupe_de_tailles_limite_a_un_point() {
+        // Une chaîne de tailles voisines de 0,4 pt s'étend sur plus d'un point : elle est
+        // coupée à son plus grand écart (titre isolé à 17,3 pt, chapitres de 16,1 à 16,9).
+        let mut blocs = vec![corps(1, &texte_long()), para(2, "s", 17.3, false, 1), corps(2, &texte_long())];
+        for (page, taille) in [(10, 16.9), (11, 16.5), (12, 16.2), (13, 16.1)] {
+            blocs.push(para(page, &format!("Titre {page}"), taille, false, 1));
+            blocs.push(corps(page, &texte_long()));
+        }
+        let (blocs, _, _) = detecter_titres(blocs, &[], 13, SourceTitres::Taille);
+        let t = titres(&blocs);
+        assert!(t.iter().all(|(n, _)| *n == 1), "{t:?}");
     }
 
     #[test]
