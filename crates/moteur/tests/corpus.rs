@@ -63,6 +63,8 @@ struct Attentes {
     n1_min: Option<usize>,
     /// Nombre maximal de titres de niveau 1, tous préfixes confondus.
     n1_max: Option<usize>,
+    /// Page minimale de tout titre de niveau 1 (titres du corps, pas d'un résumé).
+    n1_page_min: Option<u32>,
     /// Nombre exact de titres de niveau 2.
     n2: Option<usize>,
     /// Pages qui doivent porter au moins une note (de ce marqueur s'il est donné).
@@ -331,6 +333,11 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
         && n1.len() > n
     {
         echecs.push(format!("{} titres de niveau 1, plus de {n}", n1.len()));
+    }
+    if let Some(min) = a.n1_page_min {
+        for b in n1.iter().filter(|b| b.ancre.page < min) {
+            echecs.push(format!("titre de niveau 1 avant la page {min} : « {} » ({})", b.texte, b.ancre));
+        }
     }
     if let Some(n) = a.n2
         && titres(2).len() != n

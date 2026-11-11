@@ -40,6 +40,7 @@ Propres à un livre (un champ absent ou `null` n'est pas vérifié) :
 | `titres_n1` | nombre exact de titres de niveau 1 (commençant par `prefixe_n1` s'il est donné) |
 | `n1_min` | nombre minimal de titres de niveau 1 (même décompte) |
 | `n1_max` | nombre maximal de titres de niveau 1, tous confondus |
+| `n1_page_min` | aucun titre de niveau 1 avant cette page (titres du corps, pas d'un résumé) |
 | `n2` | nombre exact de titres de niveau 2 |
 | `titres_contiennent` | textes qu'au moins un titre doit contenir |
 | `notes_pages` | `{ "page", "marqueur" }` : au moins une note ancrée sur la page (de ce marqueur) |
@@ -86,14 +87,14 @@ Conversion en `--release`, epubcheck 5.4.0 : **les 9 EPUB sont valides**, le tes
 | # | Attendu | Mesuré | Durée |
 |---|---|---|---|
 | 1 | signets, ~~73~~ **27** n1 dont « VISITE À PATMOS » (voir plus bas) | signets, 27 n1 (« 1 VISITE À PATMOS »…) ; médiane 419 car. | 0,3 s |
-| 2 | gras-majuscules, 10 n1 « CHAPITRE », ≤ 20 n1 | gras-majuscules, 10 n1, tous « CHAPITRE » ; 39 n2 ; médiane **35** (dérogation) | 0,2 s |
-| 3 | pas de titre courant ; note `*` p. 36 ; 5 à 60 n1 | 0 titre courant ; 7 notes dont `*` p. 36 ; 18 n1 : les 11 chapitres, 2 titres de couverture, 5 fragments de schémas ou d'OCR | 1,1 s |
+| 2 | gras-majuscules, 10 n1 tous à partir de la p. 19, dont « LES 4 ÉLÉMENTS », « LA GENÈSE », « LUCIFER ET LE CHRIST » (attente réécrite, voir plus bas) | gras-majuscules, les 10 ouvertures du corps (pp. 19, 26, 31, 32, 33, 36, 38, 40, 53, 56) ; 29 n2 ; 48 titres courants retirés ; résumé pp. 6-11 en sommaire ; médiane **35** (dérogation) | 0,8 s |
+| 3 | pas de titre courant ; note `*` p. 36 ; 5 à 60 n1 | 0 titre courant ; 7 notes dont `*` p. 36 ; 18 n1 : les 11 chapitres, 2 titres de couverture, 5 fragments de schémas ou d'OCR | 1,7 s |
 | 4 | signets, 23 titres | signets, 23 n1, 0 n2 | 0,6 s |
 | 5 | signets, 4 n1 et 7 n2 | signets, 4 n1, 7 n2 | 0,3 s |
 | 6 | `g` et `d` ; pas de « 92 93 » ; ≥ 1 note appariée | `g` et `d` ; 0 pied résiduel ; 5 notes appariées | 0,2 s |
-| 7 | se convertit ; EPUB valide | 30 n1 ; EPUB valide ; schéma p. 6 en texte (plan 6) | 0,5 s |
+| 7 | se convertit ; EPUB valide | 28 n1 ; sommaire pp. 1-2 reconnu ; EPUB valide ; schéma p. 6 en texte (plan 6) | 1,8 s |
 | 8 | 19 n1 « CHAPITRE » ; pas de note p. 145 | 19 n1 « CHAPITRE » ; aucune note | 0,4 s |
-| 9 | ≥ 8 n1 « CHAPITRE » ; pas de note p. 367 ; < 60 s | 9 n1 dont 8 « CHAPITRE … » (+ « PREMIER CHAPITRE ») ; aucune note | 1,2 s |
+| 9 | ≥ 8 n1 « CHAPITRE » ; pas de note p. 367 ; < 60 s | 9 n1 dont 8 « CHAPITRE … » (+ « PREMIER CHAPITRE ») ; aucune note | 1,8 s |
 
 ### Dérogations (attentes communes non tenables)
 
@@ -112,17 +113,23 @@ en deux signets (« I » puis « La pierre cubique », etc.). Avec 73, l'EPUB av
 chapitres d'une ligne. Le moteur ignore désormais les signets « [n] » ; l'attente
 passe de 73 à 27.
 
-### Attente du n° 2 : à revoir par le porteur
+### Attente du n° 2 réécrite : les chapitres du corps
 
-L'attente « 10 titres de niveau 1 commençant par CHAPITRE » est tenue, mais **ces
-10 lignes forment le résumé des pp. 6-11** (« CHAPITRE 1: » … « CHAPITRE 10: »), pas
-les ouvertures de chapitre du corps. Dans le corps, les chapitres s'ouvrent par
-« LES 4 ÉLÉMENTS » (p. 19), « LA GENÈSE » (p. 32)… qui deviennent des titres de
-niveau 2. Dans ce PDF (Word → Calibre), la taille des titres dépend de leur place
-sur la page (première ligne 21,2 pt, deuxième 16,9 pt, ailleurs 15 pt) : elle ne dit
-rien du niveau. L'EPUB du n° 2 a donc 10 chapitres très courts sur les pp. 6-11 et
-tout le corps dans le dernier. Une attente plus juste porterait sur les titres du
-corps ; elle demanderait de reconnaître le sommaire sans numéros de page.
+L'attente du brief (« 10 titres de niveau 1 commençant par CHAPITRE ») visait les
+10 lignes « CHAPITRE n: » des pp. 6-11 ; ce sont celles d'un **résumé** sans numéros
+de page, pas les ouvertures de chapitre. Décision du contrôleur : les titres
+attendus sont ceux du corps. Le moteur reconnaît désormais ce résumé (pages de
+lignes courtes dont les titres reviennent plus loin) : il reste du texte, avec un
+point « sommaire », et ses paires « CHAPITRE n: » + titre servent de pseudo-signets.
+Les 10 titres de niveau 1 tombent sur les ouvertures mesurées : « LES 4 ÉLÉMENTS »
+(p. 19), « LES 4 SEASONS DANS LA NATURE » (p. 26), « LES SEPT COULEURS » (p. 31, « LES
+7 COULEURS » au résumé), « LA GENÈSE » (p. 32), « LES ANGES DANS LA TRADITION
+CABALISTIQUE » (p. 33), « LUCIFER ET LE CHRIST » (p. 36), « MOISES ET L'ARBRE DE VIE »
+(p. 38), « L'ARBRE DE VIE » (p. 40), « L'ÉVOLUTION HUMAINE » (p. 53), « D'AUTRES PENSÉES
+AU SUGET DES » (p. 56 ; « ANGES », p. 57, reste au niveau 2). Le titre du livre répété
+au fil des pages, « LES ANGES ET L'ABRE DE VIE » (48 fois), est retiré comme titre
+courant et tracé. Dans ce PDF (Word → Calibre), la taille d'un titre dépend de sa
+place sur la page (21,2 / 16,9 / 15 pt) : les niveaux 2 et 3 restent approximatifs.
 
 ## Corrections du moteur tirées du corpus
 
@@ -130,11 +137,17 @@ Chacune a son test unitaire, sans PDF du corpus.
 
 1. **Tiret de fin de ligne** (`pdf.rs`, `paragraphes.rs`) — pdfium rend le tiret qui
    termine une ligne par `\u{2}`, lu comme une espace : « Bétha nie », « sensibi
-   lité » (n° 3, 6), « concentrez vous » (Calibre). Le tiret est rendu au mot ; la
-   jonction recolle la césure, sauf devant un mot de la liste des composés
-   (« -vous », « -là », « -même », « -t-on », « -être »…) ou une majuscule
-   (« Saint-Esprit ») où le tiret reste, sans espace. Limite : un composé dont la
-   seconde partie est en minuscules et hors liste est recollé (« dramesmystères »).
+   lité » (n° 3, 6), « concentrez vous » (Calibre). Le tiret est rendu au mot ; le
+   **vocabulaire du livre** (mots et composés attestés à l'intérieur des lignes)
+   tranche : suite en majuscule → tiret gardé (« Saint-Esprit ») ; mot recollé
+   attesté → césure ; composé attesté (« dit-il ») → tiret gardé ; sinon tiret gardé
+   seulement devant une suite sans ambiguïté (vous, nous, même(s), ci, là, t, être,
+   dessus, dessous, moi, toi, soi), césure dans tous les autres cas. Une première
+   version à liste fixe gardait le tiret devant « les », « leurs »… (« subti-les »,
+   « cou-leurs » : 16 mots faux au n° 3). Les suites de notes regroupées passent par
+   la même jonction (« l'uni- versité », « philo- sophe » au n° 6). Limite : un
+   composé jamais écrit dans le livre hors fin de ligne, de suite ambiguë, est recollé
+   (« dramesmystères »).
 2. **Regroupement en lignes** (`lignes.rs`) — (a) l'OCR donne à des « * » ou « . » un
    rectangle à cheval sur deux lignes, qui servait de référence et fusionnait deux ou
    trois lignes (n° 3 p. 29 et 36) : la ponctuation passe en dernier et rejoint la
@@ -145,8 +158,10 @@ Chacune a son test unitaire, sans PDF du corpus.
    (n° 1, 17 chapitres) était retiré comme numéro de page résiduel, et le signet ne
    retrouvait plus son titre. Un nombre plus grand que le texte de la page (≥ 1,5 pt)
    n'est plus un numéro de page.
-4. **Titres** (`titres.rs`) — (a) niveaux : tailles groupées à 1 pt près (bruit
-   d'OCR 16,2-16,9 pt au n° 3) ; le premier groupe d'au moins 3 titres fait le niveau
+4. **Titres** (`titres.rs`) — (a) niveaux : tailles enchaînées à 0,5 pt près
+   (tolérance du projet), un groupe ne s'étendant pas sur plus d'1 pt (coupé à son
+   plus grand écart) : 16, 15 et 14 pt font trois niveaux, le bruit d'OCR 16,1-16,9 pt
+   du n° 3 reste groupé ; le premier groupe d'au moins 3 titres fait le niveau
    1, les tailles plus grandes mais isolées (couverture, schéma, « NOTE DE
    L'ÉDITEUR » 22,5 pt au n° 8) le rejoignent ; (b) au moins 3 titres « CHAPITRE … »
    (ou « PREMIER CHAPITRE ») forment le niveau 1, les autres descendent d'un niveau
@@ -155,7 +170,13 @@ Chacune a son test unitaire, sans PDF du corpus.
    TERRE », 16 mots, sur 4 lignes) ; (d) sommaire : des points de suspension dans le
    texte ne suffisent plus, il faut un numéro final après une espace ou des points de
    conduite (n° 2 p. 15 et n° 9 p. 440 étaient pris pour des sommaires) ; (e) les
-   signets « [12] » des notes de fin ne sont ni des titres ni un plan (n° 1, 46 signets).
+   signets « [12] » des notes de fin ne sont ni des titres ni un plan (n° 1, 46 signets) ;
+   (f) résumé sans numéros de page (sans signets) : sommaire, et pseudo-signets
+   « CHAPITRE n » pour le niveau 1 (n° 2 ; aussi les tables des pp. 1-2 du n° 7 et
+   p. 2 du n° 8) ; les nombres 0 à 20 s'écrivent en lettres pour comparer les titres ;
+   (g) un titre candidat répété sur au moins 5 pages est un titre courant : retrait
+   `titre-courant` et point (n° 2, 48 occurrences) ; (h) une date n'est jamais collée
+   à un titre voisin (« (7 MARS 1999) LES ANGES… » au n° 2).
 5. **Notes** (`notes.rs`) — (a) appel « * » séparé du mot par une ponctuation et une
    espace (« éthérique. * », n° 3 p. 36) ; (b) appel en chiffres collés au mot,
    exposant lu par l'OCR (« Hartmann2 », n° 6) — seulement si le mot finit par une
