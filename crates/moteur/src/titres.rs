@@ -18,6 +18,8 @@ const MAX_MOTS_TITRE: usize = 12;
 const MAX_LIGNES_TITRE: usize = 3;
 const ECART_TAILLE_TITRE: f32 = 1.5;
 const MIN_PAGES_TITRE_COURANT: usize = 5;
+/// Part minimale des pages du livre où un titre courant doit se trouver en bordure.
+const PART_MIN_TITRE_COURANT: f32 = 0.10;
 /// Écart de taille (pt) en deçà duquel deux titres voisins sont du même niveau.
 const TOLERANCE_TAILLE: f32 = 0.5;
 /// Étendue maximale (pt) des tailles d'un même niveau.
@@ -445,32 +447,69 @@ fn titres_courants_suspects(blocs: &[Bloc]) -> Vec<PointAVerifier> {
         .collect()
 }
 
-/// Retire les titres candidats répétés sur au moins 5 pages (titre courant pris dans le
-/// fil du texte) : chacun devient un retrait et un point à vérifier.
+/// Retire les titres courants pris dans le fil du texte. Un titre candidat est un
+/// titre courant si, sur au moins 5 pages et au moins 10 % des pages du livre, il se
+/// trouve en bordure : premier ou dernier paragraphe de sa page, ou voisin d'un
+/// paragraphe lui-même répété sur 5 pages (pied de page d'origine resté dans le texte
+/// d'un PDF recomposé). « Notes » n'est jamais un titre courant. Chaque occurrence
+/// retirée devient un retrait et un point à vérifier.
 fn retirer_titres_courants(
     blocs: Vec<Bloc>,
     pages_som: &BTreeSet<u32>,
     candidat: impl Fn(&Paragraphe) -> bool,
+    nb_pages_livre: u32,
 ) -> (Vec<Bloc>, Vec<Retrait>, Vec<PointAVerifier>) {
-    let est_candidat = |p: &Paragraphe| !pages_som.contains(&p.ancre.page) && candidat(p);
-    let mut pages: HashMap<String, BTreeSet<u32>> = HashMap::new();
-    for bloc in &blocs {
-        if let Bloc::Paragraphe(p) = bloc
-            && est_candidat(p)
-        {
-            pages.entry(normaliser(&p.texte_brut())).or_default().insert(p.ancre.page);
+    let paragraphes: Vec<(usize, &Paragraphe, String)> = blocs
+        .iter()
+        .enumerate()
+        .filter_map(|(i, b)| match b {
+            Bloc::Paragraphe(p) if !pages_som.contains(&p.ancre.page) => Some((i, p, normaliser(&p.texte_brut()))),
+            _ => None,
+        })
+        .collect();
+    let mut pages_du_texte: HashMap<&str, BTreeSet<u32>> = HashMap::new();
+    for (_, p, norm) in &paragraphes {
+        pages_du_texte.entry(norm.as_str()).or_default().insert(p.ancre.page);
+    }
+    let repete = |norm: &str| pages_du_texte.get(norm).is_some_and(|p| p.len() >= MIN_PAGES_TITRE_COURANT);
+    let mut bordures: HashMap<&str, BTreeSet<u32>> = HashMap::new();
+    for (k, (_, p, norm)) in paragraphes.iter().enumerate() {
+        if !candidat(p) || norm == "notes" {
+            continue;
+        }
+        let voisin = |j: Option<usize>| {
+            j.and_then(|j| paragraphes.get(j)).filter(|(_, q, _)| q.ancre.page == p.ancre.page)
+        };
+        let (avant, apres) = (voisin(k.checked_sub(1)), voisin(Some(k + 1)));
+        let en_bordure = avant.is_none()
+            || apres.is_none()
+            || [avant, apres].into_iter().flatten().any(|(_, _, n)| n != norm && repete(n));
+        if en_bordure {
+            bordures.entry(norm.as_str()).or_default().insert(p.ancre.page);
         }
     }
-    let nb_pages = |p: &Paragraphe| pages.get(&normaliser(&p.texte_brut())).map_or(0, BTreeSet::len);
+    let seuil = MIN_PAGES_TITRE_COURANT.max((PART_MIN_TITRE_COURANT * nb_pages_livre as f32).ceil() as usize);
+    let courants: HashMap<String, usize> = bordures
+        .into_iter()
+        .filter(|(_, pages)| pages.len() >= seuil)
+        .map(|(norm, pages)| (norm.to_string(), pages.len()))
+        .collect();
+    let a_retirer: HashSet<usize> = paragraphes
+        .iter()
+        .filter(|(_, p, norm)| candidat(p) && courants.contains_key(norm))
+        .map(|(i, _, _)| *i)
+        .collect();
+
     let (mut retraits, mut points, mut sortie) = (Vec::new(), Vec::new(), Vec::new());
-    for bloc in blocs {
+    for (i, bloc) in blocs.into_iter().enumerate() {
         match bloc {
-            Bloc::Paragraphe(p) if est_candidat(&p) && nb_pages(&p) >= MIN_PAGES_TITRE_COURANT => {
+            Bloc::Paragraphe(p) if a_retirer.contains(&i) => {
                 let texte = p.texte_brut().trim().to_string();
+                let nb = courants[&normaliser(&texte)];
                 points.push(PointAVerifier {
                     ancre: p.ancre,
                     genre: GenrePoint::TitreSuspect,
-                    message: format!("titre courant « {texte} » retiré (répété sur {} pages)", nb_pages(&p)),
+                    message: format!("titre courant « {texte} » retiré (en bordure de {nb} pages)"),
                 });
                 retraits.push(Retrait { ancre: p.ancre, role: Role::TitreCourant, texte });
             }
@@ -629,7 +668,7 @@ pub fn detecter_titres(
                 SourceTitres::GrasMajuscules => candidat_gras_majuscules(p),
                 _ => candidat_taille(p, corps),
             };
-            let (blocs, courants, pts) = retirer_titres_courants(blocs, &pages_som, candidat);
+            let (blocs, courants, pts) = retirer_titres_courants(blocs, &pages_som, candidat, nb_pages);
             retraits.extend(courants);
             points.extend(pts);
             let niveau_1_pris = !pseudo_signets.is_empty();
@@ -985,13 +1024,17 @@ mod tests {
     #[test]
     fn titre_courant_retire_et_trace() {
         // Le titre du livre, répété au fil des pages, n'est pas un titre de chapitre.
+        // PDF recomposé : l'ancien pied de page (annonce + titre du livre) est au milieu
+        // des pages, sur 6 pages d'un livre de 10.
         let mut blocs = Vec::new();
         for page in 1..=6 {
             blocs.push(para(page, &format!("CHAPITRE {page}"), 12.0, true, 1));
+            blocs.push(corps(page, &texte_long()));
+            blocs.push(corps(page, "S.v.p. n'hésitez pas à me contacter pour de plus amples informations."));
             blocs.push(para(page, "LES ANGES ET L’ABRE DE VIE", 12.0, true, 1));
             blocs.push(corps(page, &texte_long()));
         }
-        let (blocs, points, _, retraits) = detecter_titres(blocs, &[], 6, SourceTitres::GrasMajuscules);
+        let (blocs, points, _, retraits) = detecter_titres(blocs, &[], 10, SourceTitres::GrasMajuscules);
         let t = titres(&blocs);
         assert_eq!(t.len(), 6);
         assert!(t.iter().all(|(_, x)| x.starts_with("CHAPITRE")), "{t:?}");
@@ -1000,6 +1043,60 @@ mod tests {
         assert_eq!(retraits[2].ancre.page, 3);
         let suspects: Vec<_> = points.iter().filter(|p| p.genre == GenrePoint::TitreSuspect).collect();
         assert_eq!(suspects.len(), 6);
+    }
+
+    #[test]
+    fn titre_notes_repete_n_est_pas_un_titre_courant() {
+        // « NOTES » en tête de page à la fin de 6 chapitres, sur un livre de 12 pages.
+        let mut blocs = Vec::new();
+        for n in 0..6 {
+            let page = 2 * n + 1;
+            blocs.push(para(page, &format!("CHAPITRE {n}"), 12.0, true, 1));
+            blocs.push(Bloc::Paragraphe(Paragraphe {
+                segments: vec![Segment::Texte { texte: "Un mot".into(), gras: false, italique: false }, Segment::Exposant("1".into())],
+                ..match corps(page, &texte_long()) { Bloc::Paragraphe(p) => p, _ => unreachable!() }
+            }));
+            blocs.push(para(page + 1, "NOTES", 12.0, true, 1));
+            blocs.push(corps(page + 1, "1. La note du chapitre."));
+        }
+        let (blocs, _, _, retraits) = detecter_titres(blocs, &[], 12, SourceTitres::GrasMajuscules);
+        assert!(retraits.is_empty());
+        let (blocs, _, _) = crate::notes::notes_regroupees(blocs, &mut crate::notes::Etiqueteuse::new(), &crate::paragraphes::Vocabulaire::default());
+        assert_eq!(blocs.iter().filter(|b| matches!(b, Bloc::Note { .. })).count(), 6);
+    }
+
+    #[test]
+    fn titre_repete_sur_peu_de_pages_garde() {
+        // « PREMIÈRE CONFÉRENCE » en tête de 5 pages d'un livre de 300 pages : 1,7 %.
+        let mut blocs = Vec::new();
+        for page in [10, 70, 130, 190, 250] {
+            blocs.push(para(page, "PREMIÈRE CONFÉRENCE", 12.0, true, 1));
+            blocs.push(corps(page, &texte_long()));
+            blocs.push(para(page + 1, &format!("CHAPITRE {page}"), 12.0, true, 1));
+        }
+        let (blocs, _, _, retraits) = detecter_titres(blocs, &[], 300, SourceTitres::GrasMajuscules);
+        assert!(retraits.is_empty());
+        assert_eq!(titres(&blocs).iter().filter(|(_, t)| t == "PREMIÈRE CONFÉRENCE").count(), 5);
+    }
+
+    #[test]
+    fn titre_courant_en_tete_de_page_retire() {
+        // Titre courant en premier bloc de 40 % des pages (40 pages sur 100).
+        let mut blocs = Vec::new();
+        for page in 1..=100 {
+            if page % 5 < 2 {
+                blocs.push(para(page, "L'ALCHIMIE SPIRITUELLE", 12.0, true, 1));
+            }
+            if page % 20 == 3 {
+                blocs.push(para(page, &format!("CHAPITRE {page}"), 12.0, true, 1));
+            }
+            blocs.push(corps(page, &texte_long()));
+        }
+        let (blocs, points, _, retraits) = detecter_titres(blocs, &[], 100, SourceTitres::GrasMajuscules);
+        assert_eq!(retraits.len(), 40);
+        assert!(retraits.iter().all(|r| r.role == Role::TitreCourant));
+        assert!(titres(&blocs).iter().all(|(_, t)| t.starts_with("CHAPITRE")));
+        assert_eq!(points.iter().filter(|p| p.message.contains("titre courant")).count(), 40);
     }
 
     #[test]
