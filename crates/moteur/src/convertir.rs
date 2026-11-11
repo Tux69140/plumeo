@@ -9,7 +9,7 @@ use crate::lignes::{Ligne, regrouper_en_lignes};
 use crate::markdown::ecrire_markdown;
 use crate::modele::{Ancre, ErreurMoteur, Moitie, Page};
 use crate::notes::{Etiqueteuse, notes_bas_de_page, notes_regroupees};
-use crate::paragraphes::{mesurer_bloc, paragraphes_page, raccorder_pages};
+use crate::paragraphes::{Vocabulaire, mesurer_bloc, paragraphes_page, raccorder_pages};
 use crate::pdf::DocumentPdf;
 use crate::points::{GenrePoint, PointAVerifier};
 use crate::reglages::{ReglagesSerie, SourceTitres};
@@ -60,6 +60,11 @@ fn ancre_entiere(page: &Page) -> Ancre {
     Ancre { page: page.numero, moitie: page.moitie, rect: [0, 0, 1000, 1000] }
 }
 
+/// Vocabulaire des lignes de corps et de notes, pour trancher les tirets de fin de ligne.
+fn vocabulaire_de(lues: &[PageLue]) -> Vocabulaire {
+    Vocabulaire::mesurer(lues.iter().flat_map(|l| l.classee.corps.iter().chain(&l.classee.notes)))
+}
+
 fn corps_de(lues: &[PageLue]) -> Vec<Vec<Ligne>> {
     lues.iter().map(|l| l.classee.corps.clone()).collect()
 }
@@ -97,16 +102,17 @@ pub fn convertir_livre(
     }
 
     let bloc = mesurer_bloc(&corps_de(&lues));
+    let vocab = vocabulaire_de(&lues);
     let mut etiqueteuse = Etiqueteuse::new();
     let mut blocs: Vec<Bloc> = Vec::new();
     for lue in &lues {
         let (page, classee) = (&lue.page, &lue.classee);
-        let paragraphes = paragraphes_page(&classee.corps, page.numero, page.moitie, bloc);
+        let paragraphes = paragraphes_page(&classee.corps, page.numero, page.moitie, bloc, &vocab);
         if classee.corps.is_empty() && classee.notes.is_empty() {
             points.push(point_page_sans_texte(page));
         }
         let (de_page, pts) =
-            notes_bas_de_page(paragraphes, &classee.notes, page.numero, page.moitie, &mut etiqueteuse);
+            notes_bas_de_page(paragraphes, &classee.notes, page.numero, page.moitie, &mut etiqueteuse, &vocab);
         blocs.extend(de_page);
         points.extend(pts);
     }
@@ -114,10 +120,10 @@ pub fn convertir_livre(
     let source = forcer_titres.unwrap_or(reglages.titres);
     let (blocs, pts, source_titres) = detecter_titres(blocs, &doc.signets(), nb_pages, source);
     points.extend(pts);
-    let (blocs, retraits_notes, pts) = notes_regroupees(blocs, &mut etiqueteuse);
+    let (blocs, retraits_notes, pts) = notes_regroupees(blocs, &mut etiqueteuse, &vocab);
     retraits.extend(retraits_notes);
     points.extend(pts);
-    let blocs = raccorder_pages(blocs);
+    let blocs = raccorder_pages(blocs, &vocab);
 
     let nb_notes = blocs.iter().filter(|b| matches!(b, Bloc::Note { .. })).count();
     Ok(Conversion { markdown: ecrire_markdown(&blocs), retraits, points, source_titres, nb_pages, nb_notes })
@@ -138,6 +144,7 @@ fn texte_des_segments(segments: &[Segment]) -> String {
 pub fn apercu_page(doc: &DocumentPdf, numero: u32, reglages: &ReglagesSerie) -> Result<ApercuPage, ErreurMoteur> {
     let lues = lire_page(doc, numero, reglages)?;
     let bloc = mesurer_bloc(&corps_de(&lues));
+    let vocab = vocabulaire_de(&lues);
     let mut etiqueteuse = Etiqueteuse::new();
     let mut points = Vec::new();
     let mut moities = Vec::new();
@@ -146,9 +153,9 @@ pub fn apercu_page(doc: &DocumentPdf, numero: u32, reglages: &ReglagesSerie) -> 
         if classee.corps.is_empty() && classee.notes.is_empty() {
             points.push(point_page_sans_texte(page));
         }
-        let paragraphes = paragraphes_page(&classee.corps, page.numero, page.moitie, bloc);
+        let paragraphes = paragraphes_page(&classee.corps, page.numero, page.moitie, bloc, &vocab);
         let (blocs, pts) =
-            notes_bas_de_page(paragraphes, &classee.notes, page.numero, page.moitie, &mut etiqueteuse);
+            notes_bas_de_page(paragraphes, &classee.notes, page.numero, page.moitie, &mut etiqueteuse, &vocab);
         points.extend(pts);
         let texte = blocs
             .iter()

@@ -13,7 +13,7 @@ use regex::Regex;
 use crate::blocs::{Bloc, Paragraphe, Segment};
 use crate::lignes::Ligne;
 use crate::modele::{Ancre, Moitie, Rect};
-use crate::paragraphes::segments_des_lignes;
+use crate::paragraphes::{Vocabulaire, joindre, segments_des_lignes};
 use crate::points::{GenrePoint, PointAVerifier};
 use crate::titres::normaliser;
 use crate::zones::{Retrait, Role};
@@ -214,6 +214,7 @@ pub fn notes_bas_de_page(
     page: u32,
     moitie: Moitie,
     et: &mut Etiqueteuse,
+    vocab: &Vocabulaire,
 ) -> (Vec<Bloc>, Vec<PointAVerifier>) {
     // Découpe de la zone de notes en notes.
     let mut groupes: Vec<(String, Vec<Ligne>)> = Vec::new();
@@ -240,7 +241,7 @@ pub fn notes_bas_de_page(
                 tout_gras: false,
                 nb_lignes: lignes.len(),
             };
-            NoteEnAttente::nouvelle(marqueur, segments_des_lignes(&lignes), ancre, modele)
+            NoteEnAttente::nouvelle(marqueur, segments_des_lignes(&lignes, vocab), ancre, modele)
         })
         .collect();
 
@@ -340,6 +341,7 @@ enum Element {
 pub fn notes_regroupees(
     blocs: Vec<Bloc>,
     et: &mut Etiqueteuse,
+    vocab: &Vocabulaire,
 ) -> (Vec<Bloc>, Vec<Retrait>, Vec<PointAVerifier>) {
     let mut sortie: Vec<Bloc> = Vec::new();
     let mut retraits = Vec::new();
@@ -373,8 +375,7 @@ pub fn notes_regroupees(
                 notes_enchainees(m, segments)
             } else if let Some(note) = notes.last_mut() {
                 // Suite de la note précédente, qui peut contenir le début de la suivante.
-                note.segments.push(Segment::Texte { texte: " ".into(), gras: false, italique: false });
-                note.segments.extend(p.segments.iter().cloned());
+                joindre(&mut note.segments, p.segments.clone(), vocab);
                 let mut parties = notes_enchainees(note.marqueur.clone(), std::mem::take(&mut note.segments));
                 note.segments = parties.remove(0).1;
                 parties
@@ -505,7 +506,7 @@ mod tests {
         let mut et = Etiqueteuse::new();
         let p = para(vec![texte("Un mot"), Segment::Exposant("*".into())], 3, 0.2);
         let (blocs, points) =
-            notes_bas_de_page(vec![p], &[ligne("* Lire la conférence", 0.9)], 3, Moitie::Entiere, &mut et);
+            notes_bas_de_page(vec![p], &[ligne("* Lire la conférence", 0.9)], 3, Moitie::Entiere, &mut et, &Vocabulaire::default());
         assert!(points.is_empty());
         assert_eq!(blocs.len(), 2);
         let Bloc::Paragraphe(p) = &blocs[0] else { panic!() };
@@ -521,7 +522,7 @@ mod tests {
         let mut et = Etiqueteuse::new();
         let p = para(vec![texte("un double* mot")], 3, 0.2);
         let (blocs, points) =
-            notes_bas_de_page(vec![p], &[ligne("* Une précision", 0.9)], 3, Moitie::Entiere, &mut et);
+            notes_bas_de_page(vec![p], &[ligne("* Une précision", 0.9)], 3, Moitie::Entiere, &mut et, &Vocabulaire::default());
         assert!(points.is_empty());
         let Bloc::Paragraphe(p) = &blocs[0] else { panic!() };
         assert_eq!(
@@ -541,7 +542,7 @@ mod tests {
         let mut et = Etiqueteuse::new();
         let p = para(vec![texte("le corps éthérique. * Le corps")], 36, 0.2);
         let (blocs, points) =
-            notes_bas_de_page(vec![p], &[ligne("* Lire la conférence", 0.9)], 36, Moitie::Entiere, &mut et);
+            notes_bas_de_page(vec![p], &[ligne("* Lire la conférence", 0.9)], 36, Moitie::Entiere, &mut et, &Vocabulaire::default());
         assert!(points.is_empty());
         let Bloc::Paragraphe(p) = &blocs[0] else { panic!() };
         assert_eq!(
@@ -563,7 +564,7 @@ mod tests {
             titre("Notes", 2, 91),
             bloc_para(vec![texte("2. Edouard von Hartmann (1842-1906).")], 91, 0.2),
         ];
-        let (blocs, _, points) = notes_regroupees(blocs, &mut et);
+        let (blocs, _, points) = notes_regroupees(blocs, &mut et, &Vocabulaire::default());
         assert!(points.is_empty());
         let Bloc::Paragraphe(p) = &blocs[0] else { panic!() };
         assert_eq!(
@@ -581,7 +582,7 @@ mod tests {
     fn etoile_collee_sans_note_reste_du_texte() {
         let mut et = Etiqueteuse::new();
         let p = para(vec![texte("un double* mot")], 3, 0.2);
-        let (blocs, points) = notes_bas_de_page(vec![p], &[], 3, Moitie::Entiere, &mut et);
+        let (blocs, points) = notes_bas_de_page(vec![p], &[], 3, Moitie::Entiere, &mut et, &Vocabulaire::default());
         assert!(points.is_empty());
         let Bloc::Paragraphe(p) = &blocs[0] else { panic!() };
         assert_eq!(p.segments, vec![texte("un double* mot")]);
@@ -592,7 +593,7 @@ mod tests {
         let mut et = Etiqueteuse::new();
         let p = para(vec![texte("Mot"), Segment::Exposant("1".into())], 2, 0.2);
         let lignes = [ligne("1 Voir le chapitre", 0.88), ligne("suite de la note", 0.91)];
-        let (blocs, points) = notes_bas_de_page(vec![p], &lignes, 2, Moitie::Entiere, &mut et);
+        let (blocs, points) = notes_bas_de_page(vec![p], &lignes, 2, Moitie::Entiere, &mut et, &Vocabulaire::default());
         assert!(points.is_empty());
         assert_eq!(blocs.len(), 2);
         assert_eq!(texte_note(&blocs[1]), "Voir le chapitre suite de la note");
@@ -604,7 +605,7 @@ mod tests {
     fn appel_sans_note() {
         let mut et = Etiqueteuse::new();
         let blocs = vec![bloc_para(vec![texte("Mot"), Segment::Exposant("2".into())], 2, 0.2)];
-        let (blocs, retraits, points) = notes_regroupees(blocs, &mut et);
+        let (blocs, retraits, points) = notes_regroupees(blocs, &mut et, &Vocabulaire::default());
         assert!(retraits.is_empty());
         let Bloc::Paragraphe(p) = &blocs[0] else { panic!() };
         assert_eq!(p.segments[1], Segment::Exposant("2".into()));
@@ -616,7 +617,7 @@ mod tests {
     fn appel_sans_note_en_bas_de_page_n_est_pas_signale_par_cette_fonction() {
         let mut et = Etiqueteuse::new();
         let p = para(vec![texte("Mot"), Segment::Exposant("2".into())], 2, 0.2);
-        let (blocs, points) = notes_bas_de_page(vec![p], &[], 2, Moitie::Entiere, &mut et);
+        let (blocs, points) = notes_bas_de_page(vec![p], &[], 2, Moitie::Entiere, &mut et, &Vocabulaire::default());
         assert!(points.is_empty());
         let Bloc::Paragraphe(p) = &blocs[0] else { panic!() };
         assert_eq!(p.segments[1], Segment::Exposant("2".into()));
@@ -627,7 +628,7 @@ mod tests {
         let mut et = Etiqueteuse::new();
         let p = para(vec![texte("Rien ici")], 2, 0.2);
         let (blocs, points) =
-            notes_bas_de_page(vec![p], &[ligne("3 texte", 0.9)], 2, Moitie::Entiere, &mut et);
+            notes_bas_de_page(vec![p], &[ligne("3 texte", 0.9)], 2, Moitie::Entiere, &mut et, &Vocabulaire::default());
         assert_eq!(blocs.len(), 2);
         let Bloc::Paragraphe(p) = &blocs[1] else { panic!("attendu un paragraphe") };
         assert_eq!(p.texte_brut(), "3 texte");
@@ -640,7 +641,7 @@ mod tests {
         let mut et = Etiqueteuse::new();
         let p1 = para(vec![texte("1. Premier point")], 2, 0.2);
         let p2 = para(vec![texte("2. Second point")], 2, 0.3);
-        let (blocs, points) = notes_bas_de_page(vec![p1, p2], &[], 2, Moitie::Entiere, &mut et);
+        let (blocs, points) = notes_bas_de_page(vec![p1, p2], &[], 2, Moitie::Entiere, &mut et, &Vocabulaire::default());
         assert!(points.is_empty());
         assert_eq!(blocs.len(), 2);
         assert!(blocs.iter().all(|b| matches!(b, Bloc::Paragraphe(_))));
@@ -664,7 +665,7 @@ mod tests {
             bloc_para(vec![texte("1 Texte un")], 2, 0.2),
             bloc_para(vec![texte("2 Texte deux")], 2, 0.3),
         ];
-        let (blocs, retraits, points) = notes_regroupees(blocs, &mut et);
+        let (blocs, retraits, points) = notes_regroupees(blocs, &mut et, &Vocabulaire::default());
         assert!(points.is_empty());
         assert_eq!(retraits.len(), 1);
         assert_eq!(retraits[0].role, Role::TitreNotes);
@@ -692,7 +693,7 @@ mod tests {
         };
         let mut blocs = chapitre(1);
         blocs.extend(chapitre(2));
-        let (blocs, retraits, points) = notes_regroupees(blocs, &mut et);
+        let (blocs, retraits, points) = notes_regroupees(blocs, &mut et, &Vocabulaire::default());
         assert!(points.is_empty());
         assert_eq!(retraits.len(), 2);
         let etiquettes: Vec<&str> = blocs
@@ -718,7 +719,7 @@ mod tests {
             bloc_para(vec![texte("fin de la note")], 2, 0.3),
             bloc_para(vec![Segment::Exposant("7".into()), texte(" Sans appel")], 2, 0.4),
         ];
-        let (blocs, retraits, points) = notes_regroupees(blocs, &mut et);
+        let (blocs, retraits, points) = notes_regroupees(blocs, &mut et, &Vocabulaire::default());
         assert_eq!(retraits.len(), 1);
         assert_eq!(texte_note(&blocs[1]), "Début fin de la note");
         let Bloc::Paragraphe(p) = &blocs[2] else { panic!() };
@@ -740,7 +741,7 @@ mod tests {
             titre("Notes", 2, 2),
             bloc_para(vec![texte("5. Kant (1724-1804); «Critique», introduction. 6. Kant: voir note 5.")], 2, 0.2),
         ];
-        let (blocs, _, points) = notes_regroupees(blocs, &mut et);
+        let (blocs, _, points) = notes_regroupees(blocs, &mut et, &Vocabulaire::default());
         assert!(points.is_empty());
         assert_eq!(blocs.len(), 3);
         assert_eq!(texte_note(&blocs[1]), "Kant (1724-1804); «Critique», introduction.");
@@ -753,10 +754,25 @@ mod tests {
             bloc_para(vec![texte("3. Christian Wolff, «Philosophia rationalis sive")], 2, 0.2),
             bloc_para(vec![texte("logica» 1728. 4. David Hume, 1739.")], 2, 0.3),
         ];
-        let (blocs, _, points) = notes_regroupees(blocs, &mut et);
+        let (blocs, _, points) = notes_regroupees(blocs, &mut et, &Vocabulaire::default());
         assert!(points.is_empty());
         assert_eq!(texte_note(&blocs[1]), "Christian Wolff, «Philosophia rationalis sive logica» 1728.");
         assert_eq!(texte_note(&blocs[2]), "David Hume, 1739.");
+    }
+
+    #[test]
+    fn suite_de_note_regroupee_recolle_la_cesure() {
+        let mut et = Etiqueteuse::new();
+        let blocs = vec![
+            bloc_para(vec![texte("Baumann"), Segment::Exposant("23".into())], 1, 0.2),
+            titre("Notes", 2, 2),
+            bloc_para(vec![texte("23. Julius Baumann, professeur à l'uni-")], 2, 0.2),
+            bloc_para(vec![texte("versité de Göttingen, philo-")], 2, 0.3),
+            bloc_para(vec![texte("sophe.")], 2, 0.4),
+        ];
+        let (blocs, _, points) = notes_regroupees(blocs, &mut et, &Vocabulaire::default());
+        assert!(points.is_empty());
+        assert_eq!(texte_note(&blocs[1]), "Julius Baumann, professeur à l'université de Göttingen, philosophe.");
     }
 
     #[test]
@@ -767,7 +783,7 @@ mod tests {
             titre("Notes", 2, 2),
             bloc_para(vec![Segment::Exposant("7".into()), texte(" Texte sept")], 2, 0.2),
         ];
-        let (blocs, _, points) = notes_regroupees(blocs, &mut et);
+        let (blocs, _, points) = notes_regroupees(blocs, &mut et, &Vocabulaire::default());
         assert!(points.is_empty());
         assert_eq!(texte_note(&blocs[1]), "Texte sept");
     }

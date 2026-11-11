@@ -1,6 +1,8 @@
 //! Regroupement des lignes de corps en paragraphes, recollage des césures et
 //! raccord des paragraphes coupés par un saut de page.
 
+use std::collections::HashSet;
+
 use crate::blocs::{Bloc, Paragraphe, Segment};
 use crate::lignes::Ligne;
 use crate::modele::{Moitie, Ancre, Rect};
@@ -60,38 +62,83 @@ fn finit_par_cesure(texte: &str) -> bool {
     matches!((it.next(), it.next()), (Some(t), Some(c)) if est_tiret(t) && c.is_alphabetic())
 }
 
-/// Mots qui suivent le trait d'union des mots composés courants (« dites-vous »,
-/// « celle-ci », « peut-être », « dit-il ») : le tiret de fin de ligne est alors gardé.
-const SUITES_DE_TRAIT_D_UNION: [&str; 31] = [
-    "je", "tu", "il", "ils", "elle", "elles", "on", "nous", "vous", "le", "la", "les", "lui", "leur",
-    "leurs", "moi", "toi", "soi", "y", "en", "ce", "ci", "là", "même", "mêmes", "t", "être", "dessus",
-    "dessous", "bas", "haut",
-];
+/// Fins de mot composé sans ambiguïté (« dites-vous », « celle-ci », « peut-être ») :
+/// aucune césure ne laisse ces fragments en début de ligne.
+const SUITES_DE_TRAIT_D_UNION: [&str; 13] =
+    ["vous", "nous", "même", "mêmes", "ci", "là", "t", "être", "dessus", "dessous", "moi", "toi", "soi"];
 
 /// Jonction d'un texte qui finit par un tiret de fin de ligne avec la suite.
-enum Cesure {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cesure {
     /// Césure : le tiret disparaît, les deux morceaux sont collés.
     Recoller,
     /// Trait d'union d'un mot composé : le tiret reste, sans espace après.
     GarderTiret,
 }
 
-fn cesure(avant: &str, suite: &str) -> Option<Cesure> {
-    if !finit_par_cesure(avant) {
-        return None;
+fn est_trait_d_union(c: char) -> bool {
+    est_tiret(c) || c == '\u{2011}'
+}
+
+/// Vocabulaire d'un livre : mots et mots composés attestés à l'intérieur des lignes.
+/// Il tranche les tirets de fin de ligne (césure ou mot composé).
+#[derive(Debug, Default)]
+pub struct Vocabulaire {
+    mots: HashSet<String>,
+    composes: HashSet<String>,
+}
+
+impl Vocabulaire {
+    pub fn mesurer<'a>(lignes: impl IntoIterator<Item = &'a Ligne>) -> Vocabulaire {
+        let mut v = Vocabulaire::default();
+        for ligne in lignes {
+            for mot in &ligne.mots {
+                let texte = mot.texte.replace('\u{AD}', "").to_lowercase();
+                for jeton in texte.split(|c: char| !c.is_alphabetic() && !est_trait_d_union(c)) {
+                    let parties: Vec<&str> = jeton.split(est_trait_d_union).filter(|p| !p.is_empty()).collect();
+                    for paire in parties.windows(2) {
+                        v.composes.insert(format!("{}-{}", paire[0], paire[1]));
+                    }
+                    v.mots.extend(parties.iter().map(|p| p.to_string()));
+                }
+            }
+        }
+        v
     }
-    let premier = suite.chars().next()?;
-    if premier.is_uppercase() {
-        return Some(Cesure::GarderTiret);
-    }
-    if !premier.is_lowercase() {
-        return None;
-    }
-    let mot: String = suite.chars().take_while(|c| c.is_alphabetic()).collect();
-    if SUITES_DE_TRAIT_D_UNION.contains(&mot.as_str()) {
-        Some(Cesure::GarderTiret)
-    } else {
-        Some(Cesure::Recoller)
+
+    /// Jonction de `avant` (qui finit par un tiret de fin de ligne) avec `suite` :
+    /// - suite en majuscule : mot composé (« Saint-Esprit ») ;
+    /// - mot recollé attesté dans le livre : césure ;
+    /// - mot composé attesté dans le livre : trait d'union gardé ;
+    /// - suite sans ambiguïté (« vous », « là », « même »…) : trait d'union gardé ;
+    /// - sinon : césure.
+    ///
+    /// `None` si `avant` ne finit pas par une césure ou si la suite ne commence pas par
+    /// une lettre.
+    pub fn jonction(&self, avant: &str, suite: &str) -> Option<Cesure> {
+        if !finit_par_cesure(avant) {
+            return None;
+        }
+        let premier = suite.chars().next()?;
+        if premier.is_uppercase() {
+            return Some(Cesure::GarderTiret);
+        }
+        if !premier.is_lowercase() {
+            return None;
+        }
+        let tete = &avant[..avant.len() - avant.chars().last().map_or(0, char::len_utf8)];
+        let gauche: String = tete.chars().rev().take_while(|c| c.is_alphabetic()).collect::<Vec<_>>().into_iter().rev().collect();
+        let gauche = gauche.to_lowercase();
+        let droite: String = suite.chars().take_while(|c| c.is_alphabetic()).collect::<String>().to_lowercase();
+        if self.mots.contains(&format!("{gauche}{droite}")) {
+            Some(Cesure::Recoller)
+        } else if self.composes.contains(&format!("{gauche}-{droite}"))
+            || SUITES_DE_TRAIT_D_UNION.contains(&droite.as_str())
+        {
+            Some(Cesure::GarderTiret)
+        } else {
+            Some(Cesure::Recoller)
+        }
     }
 }
 
@@ -109,7 +156,7 @@ fn ajouter_texte(segments: &mut Vec<Segment>, texte: &str, gras: bool, italique:
     segments.push(Segment::Texte { texte: texte.to_string(), gras, italique });
 }
 
-pub(crate) fn segments_des_lignes(lignes: &[Ligne]) -> Vec<Segment> {
+pub(crate) fn segments_des_lignes(lignes: &[Ligne], vocab: &Vocabulaire) -> Vec<Segment> {
     let mut segments: Vec<Segment> = Vec::new();
     // Séparateur à placer devant le premier mot de la ligne courante.
     let mut espace_en_tete = false;
@@ -134,7 +181,7 @@ pub(crate) fn segments_des_lignes(lignes: &[Ligne]) -> Vec<Segment> {
             if dernier.texte.ends_with('\u{AD}') {
                 espace_en_tete = false;
             } else if !ligne.exposants.contains(&(ligne.mots.len() - 1)) {
-                match cesure(&dernier.texte, &suivante.texte()) {
+                match vocab.jonction(&dernier.texte, &suivante.texte()) {
                     Some(Cesure::Recoller) => {
                         retirer_dernier_caractere(&mut segments);
                         espace_en_tete = false;
@@ -157,7 +204,7 @@ fn retirer_dernier_caractere(segments: &mut Vec<Segment>) {
     }
 }
 
-fn paragraphe_de(lignes: &[Ligne], page: u32, moitie: Moitie) -> Paragraphe {
+fn paragraphe_de(lignes: &[Ligne], page: u32, moitie: Moitie, vocab: &Vocabulaire) -> Paragraphe {
     let rect = Rect {
         x0: lignes.iter().map(|l| l.rect.x0).fold(f32::MAX, f32::min),
         y0: lignes.iter().map(|l| l.rect.y0).fold(f32::MAX, f32::min),
@@ -165,7 +212,7 @@ fn paragraphe_de(lignes: &[Ligne], page: u32, moitie: Moitie) -> Paragraphe {
         y1: lignes.iter().map(|l| l.rect.y1).fold(f32::MIN, f32::max),
     };
     Paragraphe {
-        segments: segments_des_lignes(lignes),
+        segments: segments_des_lignes(lignes, vocab),
         ancre: Ancre::depuis(page, moitie, rect),
         taille: mediane(lignes.iter().map(Ligne::taille).collect()),
         tout_gras: lignes.iter().all(Ligne::tout_gras),
@@ -173,12 +220,18 @@ fn paragraphe_de(lignes: &[Ligne], page: u32, moitie: Moitie) -> Paragraphe {
     }
 }
 
-pub fn paragraphes_page(lignes: &[Ligne], page: u32, moitie: Moitie, bloc: BlocTexte) -> Vec<Paragraphe> {
+pub fn paragraphes_page(
+    lignes: &[Ligne],
+    page: u32,
+    moitie: Moitie,
+    bloc: BlocTexte,
+    vocab: &Vocabulaire,
+) -> Vec<Paragraphe> {
     let mut resultat = Vec::new();
     let mut debut = 0;
     for i in 1..=lignes.len() {
         if i == lignes.len() || coupure(&lignes[i - 1], &lignes[i], bloc) {
-            resultat.push(paragraphe_de(&lignes[debut..i], page, moitie));
+            resultat.push(paragraphe_de(&lignes[debut..i], page, moitie, vocab));
             debut = i;
         }
     }
@@ -196,36 +249,58 @@ fn dernier_caractere_de_texte(segments: &[Segment]) -> Option<char> {
     })
 }
 
-/// Colle `suite` à `p` (paragraphe coupé par un saut de page).
-fn fusionner(p: &mut Paragraphe, suite: Paragraphe) {
-    let jonction = match p.segments.last() {
-        Some(Segment::Texte { .. }) => cesure(&p.texte_brut(), &suite.texte_brut()),
+/// Colle les segments `suite` à la fin de `segments` : césure recollée, trait d'union
+/// gardé, ou une espace.
+pub(crate) fn joindre(segments: &mut Vec<Segment>, suite: Vec<Segment>, vocab: &Vocabulaire) {
+    let brut = |s: &[Segment]| -> String {
+        s.iter()
+            .map(|x| match x {
+                Segment::Texte { texte, .. } | Segment::Exposant(texte) => texte.as_str(),
+                Segment::AppelNote { marqueur, .. } => marqueur.as_str(),
+            })
+            .collect()
+    };
+    let jonction = match segments.last() {
+        Some(Segment::Texte { .. }) => vocab.jonction(&brut(segments), brut(&suite).trim_start()),
         _ => None,
     };
-    if let Some(jonction) = jonction {
-        if matches!(jonction, Cesure::Recoller) {
-            retirer_dernier_caractere(&mut p.segments);
+    match jonction {
+        Some(Cesure::Recoller) => retirer_dernier_caractere(segments),
+        Some(Cesure::GarderTiret) => {}
+        None => {
+            let (gras, italique) = match segments.last() {
+                Some(Segment::Texte { gras, italique, .. }) => (*gras, *italique),
+                _ => (false, false),
+            };
+            ajouter_texte(segments, " ", gras, italique);
         }
-    } else {
-        let (gras, italique) = match p.segments.last() {
-            Some(Segment::Texte { gras, italique, .. }) => (*gras, *italique),
-            _ => (false, false),
-        };
-        ajouter_texte(&mut p.segments, " ", gras, italique);
     }
-    for segment in suite.segments {
+    let mut debut = jonction.is_some();
+    for segment in suite {
         match segment {
-            Segment::Texte { texte, gras, italique } => ajouter_texte(&mut p.segments, &texte, gras, italique),
-            autre => p.segments.push(autre),
+            Segment::Texte { texte, gras, italique } => {
+                let texte = if debut { texte.trim_start() } else { texte.as_str() };
+                debut = false;
+                ajouter_texte(segments, texte, gras, italique);
+            }
+            autre => {
+                debut = false;
+                segments.push(autre);
+            }
         }
     }
+}
+
+/// Colle `suite` à `p` (paragraphe coupé par un saut de page).
+fn fusionner(p: &mut Paragraphe, suite: Paragraphe, vocab: &Vocabulaire) {
+    joindre(&mut p.segments, suite.segments, vocab);
     p.tout_gras = p.tout_gras && suite.tout_gras;
     p.nb_lignes += suite.nb_lignes;
 }
 
 /// Raccorde les paragraphes coupés par un saut de page. Les notes situées entre
 /// les deux sont sautées (elles gardent leur place) ; un titre bloque le raccord.
-pub fn raccorder_pages(blocs: Vec<Bloc>) -> Vec<Bloc> {
+pub fn raccorder_pages(blocs: Vec<Bloc>, vocab: &Vocabulaire) -> Vec<Bloc> {
     let mut sortie: Vec<Bloc> = Vec::new();
     for bloc in blocs {
         let Bloc::Paragraphe(suite) = bloc else {
@@ -238,7 +313,7 @@ pub fn raccorder_pages(blocs: Vec<Bloc>) -> Vec<Bloc> {
             let ouvert = dernier_caractere_de_texte(&p.segments)
                 .is_some_and(|c| !PONCTUATION_FINALE.contains(&c));
             if autre_page && ouvert && !suite.texte_brut().is_empty() {
-                fusionner(p, suite);
+                fusionner(p, suite, vocab);
                 continue;
             }
         }
@@ -313,7 +388,7 @@ mod tests {
             ligne("deux", 0.1, 0.66, 0.13),
             ligne("trois", 0.1, 0.9, 0.16),
         ];
-        let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC);
+        let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC, &Vocabulaire::default());
         assert_eq!(textes(&p), vec!["un deux", "trois"]);
         assert_eq!(p[0].nb_lignes, 2);
     }
@@ -321,7 +396,7 @@ mod tests {
     #[test]
     fn ecart_vertical() {
         let lignes = vec![ligne("un", 0.1, 0.9, 0.10), ligne("deux", 0.1, 0.9, 0.16)];
-        let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC);
+        let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC, &Vocabulaire::default());
         assert_eq!(p.len(), 2);
     }
 
@@ -331,7 +406,7 @@ mod tests {
             ligne("un", 0.1, 0.9, 0.10),
             ligne("deux", 0.1 + 0.05 * 0.8, 0.9, 0.13),
         ];
-        let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC);
+        let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC, &Vocabulaire::default());
         assert_eq!(p.len(), 2);
     }
 
@@ -341,18 +416,59 @@ mod tests {
             ligne_taille("grand", 0.1, 0.9, 0.10, 19.0, false),
             ligne_taille("petit", 0.1, 0.9, 0.13, 15.0, false),
         ];
-        assert_eq!(paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC).len(), 2);
+        assert_eq!(paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC, &Vocabulaire::default()).len(), 2);
     }
 
     #[test]
     fn cesure_recollee() {
         let lignes = vec![ligne("mer-", 0.1, 0.9, 0.10), ligne("veilleux", 0.1, 0.9, 0.13)];
-        let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC);
+        let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC, &Vocabulaire::default());
         assert_eq!(textes(&p), vec!["merveilleux"]);
 
         let lignes = vec![ligne("Saint-", 0.1, 0.9, 0.10), ligne("Esprit", 0.1, 0.9, 0.13)];
-        let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC);
+        let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC, &Vocabulaire::default());
         assert_eq!(textes(&p), vec!["Saint-Esprit"]);
+    }
+
+    #[test]
+    fn cesures_sur_des_fins_de_mot_courantes_recollees() {
+        // « les », « leurs » sont des fins de mot fréquentes après une césure (n° 3).
+        for (avant, apres, attendu) in [
+            ("subti-", "les", "subtiles"),
+            ("cou-", "leurs", "couleurs"),
+            ("cha-", "leur", "chaleur"),
+            ("spirituel-", "les", "spirituelles"),
+        ] {
+            let lignes = vec![ligne(avant, 0.1, 0.9, 0.10), ligne(apres, 0.1, 0.9, 0.13)];
+            let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC, &Vocabulaire::default());
+            assert_eq!(textes(&p), vec![attendu]);
+        }
+    }
+
+    #[test]
+    fn vocabulaire_du_livre_decide_des_cesures() {
+        let lignes = vec![
+            ligne_de_mots(vec![
+                mot("le", 0.1, 0.2, 0.10, 12.0, false, false),
+                mot("porte-monnaie,", 0.2, 0.4, 0.10, 12.0, false, false),
+                mot("dit-il,", 0.4, 0.5, 0.10, 12.0, false, false),
+                mot("Lui-même", 0.5, 0.6, 0.10, 12.0, false, false),
+                mot("l'en-", 0.6, 0.9, 0.10, 12.0, false, false),
+            ]),
+            ligne("semble", 0.1, 0.9, 0.13),
+        ];
+        let v = Vocabulaire::mesurer(&lignes);
+        assert_eq!(v.jonction("porte-", "monnaie"), Some(Cesure::GarderTiret));
+        assert_eq!(v.jonction("dit-", "il,"), Some(Cesure::GarderTiret));
+        assert_eq!(v.jonction("lui-", "même"), Some(Cesure::GarderTiret));
+        assert_eq!(v.jonction("l'ensem-", "ble"), Some(Cesure::Recoller));
+        assert_eq!(Vocabulaire::default().jonction("dit-", "il"), Some(Cesure::Recoller));
+        assert_eq!(Vocabulaire::default().jonction("Saint-", "Esprit"), Some(Cesure::GarderTiret));
+        assert_eq!(Vocabulaire::default().jonction("page", "12"), None);
+        // Le mot recollé attesté dans le livre l'emporte sur la liste : « émoi ».
+        assert_eq!(Vocabulaire::default().jonction("é-", "moi"), Some(Cesure::GarderTiret));
+        let v = Vocabulaire::mesurer(&[ligne("émoi", 0.1, 0.9, 0.10)]);
+        assert_eq!(v.jonction("é-", "moi"), Some(Cesure::Recoller));
     }
 
     #[test]
@@ -365,7 +481,7 @@ mod tests {
             ("peut-", "être", "peut-être"),
         ] {
             let lignes = vec![ligne(avant, 0.1, 0.9, 0.10), ligne(apres, 0.1, 0.9, 0.13)];
-            let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC);
+            let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC, &Vocabulaire::default());
             assert_eq!(textes(&p), vec![attendu]);
         }
     }
@@ -373,11 +489,11 @@ mod tests {
     #[test]
     fn trait_d_union_conditionnel() {
         let lignes = vec![ligne("mer\u{AD}", 0.1, 0.9, 0.10), ligne("veilleux", 0.1, 0.9, 0.13)];
-        let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC);
+        let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC, &Vocabulaire::default());
         assert_eq!(textes(&p), vec!["merveilleux"]);
 
         let lignes = vec![ligne("au\u{AD}jourd'hui", 0.1, 0.9, 0.10)];
-        let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC);
+        let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC, &Vocabulaire::default());
         assert_eq!(textes(&p), vec!["aujourd'hui"]);
     }
 
@@ -393,7 +509,7 @@ mod tests {
         let mut l = ligne_de_mots(mots);
         l.mots[4].espace_avant = false;
         l.exposants = vec![4];
-        let p = paragraphes_page(&[l], 1, Moitie::Entiere, BLOC);
+        let p = paragraphes_page(&[l], 1, Moitie::Entiere, BLOC, &Vocabulaire::default());
         assert_eq!(
             p[0].segments,
             vec![
@@ -409,17 +525,17 @@ mod tests {
     #[test]
     fn raccord_inter_pages() {
         let blocs = vec![para("ce que", 4, 0.8), para("l'on dit", 5, 0.1)];
-        let r = raccorder_pages(blocs);
+        let r = raccorder_pages(blocs, &Vocabulaire::default());
         assert_eq!(r.len(), 1);
         assert_eq!(texte_de(&r[0]), "ce que l'on dit");
         assert_eq!(r[0].ancre().page, 4);
 
         let blocs = vec![para("la fin.", 4, 0.8), para("Suite", 5, 0.1)];
-        assert_eq!(raccorder_pages(blocs).len(), 2);
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default()).len(), 2);
 
         let titre = Bloc::Titre { niveau: 1, texte: "T".into(), ancre: para("", 5, 0.1).ancre() };
         let blocs = vec![para("ce que", 4, 0.8), titre];
-        assert_eq!(raccorder_pages(blocs).len(), 2);
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default()).len(), 2);
     }
 
     #[test]
@@ -431,7 +547,7 @@ mod tests {
             ancre: para("", 4, 0.9).ancre(),
         };
         let blocs = vec![para("ce que", 4, 0.8), note, para("l'on dit", 5, 0.1)];
-        let r = raccorder_pages(blocs);
+        let r = raccorder_pages(blocs, &Vocabulaire::default());
         assert_eq!(r.len(), 2);
         assert_eq!(texte_de(&r[0]), "ce que l'on dit");
         assert!(matches!(r[1], Bloc::Note { .. }));
@@ -449,7 +565,7 @@ mod tests {
 
     #[test]
     fn raccord_ignore_l_appel_de_note_final() {
-        let r = raccorder_pages(vec![para_avec_fin("la fin.", appel()), para("Suite", 5, 0.1)]);
+        let r = raccorder_pages(vec![para_avec_fin("la fin.", appel()), para("Suite", 5, 0.1)], &Vocabulaire::default());
         assert_eq!(r.len(), 2);
     }
 
@@ -458,13 +574,13 @@ mod tests {
         let r = raccorder_pages(vec![
             para_avec_fin("la fin.", Segment::Exposant("1".into())),
             para("Suite", 5, 0.1),
-        ]);
+        ], &Vocabulaire::default());
         assert_eq!(r.len(), 2);
     }
 
     #[test]
     fn raccord_malgre_un_appel_de_note_apres_un_mot() {
-        let r = raccorder_pages(vec![para_avec_fin("ce que", appel()), para("l'on dit", 5, 0.1)]);
+        let r = raccorder_pages(vec![para_avec_fin("ce que", appel()), para("l'on dit", 5, 0.1)], &Vocabulaire::default());
         assert_eq!(r.len(), 1);
         assert_eq!(texte_de(&r[0]), "ce que1 l'on dit");
     }
@@ -472,18 +588,18 @@ mod tests {
     #[test]
     fn pas_de_raccord_sur_la_meme_page() {
         let blocs = vec![para("ce que", 4, 0.1), para("l'on dit", 4, 0.3)];
-        assert_eq!(raccorder_pages(blocs).len(), 2);
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default()).len(), 2);
     }
 
     #[test]
     fn raccord_recolle_une_cesure() {
         let blocs = vec![para("mer-", 4, 0.8), para("veilleux", 5, 0.1)];
-        let r = raccorder_pages(blocs);
+        let r = raccorder_pages(blocs, &Vocabulaire::default());
         assert_eq!(texte_de(&r[0]), "merveilleux");
         let blocs = vec![para("dites-", 4, 0.8), para("vous bien", 5, 0.1)];
-        assert_eq!(texte_de(&raccorder_pages(blocs)[0]), "dites-vous bien");
+        assert_eq!(texte_de(&raccorder_pages(blocs, &Vocabulaire::default())[0]), "dites-vous bien");
         let blocs = vec![para("le Saint-", 4, 0.8), para("Esprit", 5, 0.1)];
-        assert_eq!(texte_de(&raccorder_pages(blocs)[0]), "le Saint-Esprit");
+        assert_eq!(texte_de(&raccorder_pages(blocs, &Vocabulaire::default())[0]), "le Saint-Esprit");
     }
 
     #[test]
