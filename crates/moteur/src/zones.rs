@@ -16,6 +16,8 @@ pub enum Role {
     Pied,
     NumeroPage,
     TitreNotes,
+    /// Titre courant pris dans le fil du texte, reconnu à sa répétition.
+    TitreCourant,
 }
 
 #[derive(Clone, Debug, Serialize)]
