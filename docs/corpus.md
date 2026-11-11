@@ -179,7 +179,7 @@ Chacune a son test unitaire, sans PDF du corpus.
    lui-même répété sur 5 pages, comme l'ancien pied de page « S.v.p. n'hésitez pas… »
    des PDF recomposés) sur au moins 5 pages et 10 % des pages du livre ; « Notes »
    n'en est jamais un. Retrait `titre-courant` et point (n° 2 : 48 occurrences, en
-   bordure sur 47 pages de 195 ; 38 sont au milieu de la page, juste après l'annonce
+   bordure sur 46 pages de 195 ; 38 sont au milieu de la page, juste après l'annonce
    répétée) ; (h) une date n'est jamais collée
    à un titre voisin (« (7 MARS 1999) LES ANGES… » au n° 2) ; (i) pas de raccord de
    paragraphe à travers un saut de page si l'une des deux pages est un sommaire (les
