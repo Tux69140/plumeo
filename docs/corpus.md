@@ -205,7 +205,7 @@ Fait sans interface graphique, sur le contenu des EPUB n° 1, 3 et 6 (décompres
   de couverture et 5 fragments de schémas ou d'OCR (« Corps m\-- », « s »… : plan 6) ;
   n° 6, 3 titres seulement (les titres de conférence, au corps du texte et non gras,
   ne sont pas détectés).
-- **Notes** : n° 3, 7 notes `<aside epub:type="footnote">`, appel `<a role="doc-noteref">`
+- **Notes** : n° 3, 7 notes `<aside epub:type="footnote">`, appel `<a epub:type="noteref">`
   et retour `<a href="#appel-N">↩</a>` ; n° 6, 5 notes. Le n° 1 n'a aucune note
   appariée (notes en fin de livre appelées « [1] », non gérées).
 - **En-têtes** : aucun « L'alchimie spirituelle » + numéro dans le n° 3 hors de la

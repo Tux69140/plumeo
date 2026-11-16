@@ -362,6 +362,10 @@ Le défilement proportionnel de Lumosphère ne suffit pas.
 1. « Valider » génère l'EPUB depuis le Markdown révisé.
 2. Un livre ouvert en révision n'est plus touché par les changements de sa série.
 3. « Reconvertir » reste possible, mais avec un avertissement : les corrections sont perdues.
+4. Avant d'accepter du Markdown édité, resserrer la liste blanche HTML de `plumeo-epub` (relecture finale du jalon 1) :
+   - attributs de `img`, `br` et `hr` filtrés : ni `onerror`, ni `src` externe ou absent du paquet ;
+   - un `>` entre guillemets ne ferme pas la balise (`<img alt="a>b">`) ;
+   - entités HTML nommées (`&nbsp;`) converties au lieu de rendre l'XHTML invalide.
 
 **Acceptation du jalon :** le parcours complet sur #1, #3 et #6 :
 
