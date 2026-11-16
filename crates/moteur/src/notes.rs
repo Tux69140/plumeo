@@ -1052,10 +1052,10 @@ mod tests {
 
     #[test]
     fn note_3_au_8e_bloc_suivant_ouvre_la_section() {
-        // Point 1, point 2, 5 paragraphes, point 3 : le point 3 est le 8e bloc après le 1.
+        // Après le point 1 : point 2 (1er bloc), 6 paragraphes (2e à 7e), point 3 (8e bloc).
         let mut blocs = vec![appels(&["1", "2", "3"])];
         blocs.extend(liste(2));
-        blocs.extend((0..5).map(|_| bloc_para(vec![texte("suite.")], 5, 0.5)));
+        blocs.extend((0..6).map(|_| bloc_para(vec![texte("suite.")], 5, 0.5)));
         blocs.push(bloc_para(vec![texte("3. Point 3")], 6, 0.1));
         let (sortie, _, points) = notes_regroupees(blocs, &mut Etiqueteuse::new(), &Vocabulaire::default());
         assert!(points.is_empty(), "{points:?}");
