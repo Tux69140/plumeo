@@ -46,6 +46,96 @@ fn est_ancre(e: &Event) -> bool {
     matches!(e, Event::Html(h) if h.trim_start().starts_with("<!-- @"))
 }
 
+/// Minuscules, sans accents ni ponctuation, espaces réduits.
+fn normaliser(s: &str) -> String {
+    let plie: String = s
+        .chars()
+        .flat_map(char::to_lowercase)
+        // Accents combinants (texte décomposé).
+        .filter(|c| !('\u{300}'..='\u{36f}').contains(c))
+        .map(|c| match c {
+            'à' | 'â' | 'ä' | 'á' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'î' | 'ï' | 'í' => 'i',
+            'ô' | 'ö' | 'ó' => 'o',
+            'ù' | 'û' | 'ü' | 'ú' => 'u',
+            'ç' => 'c',
+            c if c.is_alphanumeric() => c,
+            _ => ' ',
+        })
+        .collect();
+    plie.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Titre posé par le moteur sur un sommaire imprimé (`sommaire_cliquable`).
+fn est_titre_de_sommaire(titre: &str) -> bool {
+    matches!(normaliser(titre).as_str(), "table des matieres" | "sommaire")
+}
+
+/// Lien interne vers un titre (entrée de sommaire imprimé).
+fn est_lien_vers_titre(e: &Event) -> bool {
+    matches!(e, Event::Start(Tag::Link { dest_url, .. }) if dest_url.starts_with("#t-"))
+}
+
+/// Fin (exclue) du dernier bloc de premier niveau (paragraphe d'entrée) qui contient
+/// un lien vers un titre.
+fn fin_des_entrees(evenements: &[Event]) -> Option<usize> {
+    let mut profondeur = 0usize;
+    let mut avec_lien = false;
+    let mut fin = None;
+    for (i, e) in evenements.iter().enumerate() {
+        avec_lien |= est_lien_vers_titre(e);
+        match e {
+            Event::Start(_) => profondeur += 1,
+            Event::End(_) => {
+                profondeur = profondeur.saturating_sub(1);
+                if profondeur == 0 {
+                    if avec_lien {
+                        fin = Some(i + 1);
+                    }
+                    avec_lien = false;
+                }
+            }
+            _ => {}
+        }
+    }
+    fin
+}
+
+/// Le sommaire imprimé (premier chapitre « Table des matières » ou « Sommaire » qui
+/// mène à des titres) vient juste après le chapitre du titre du livre. Ce qui suit sa
+/// dernière entrée (colophon…) et ses définitions de notes restent à leur place dans
+/// l'ordre de lecture : à la fin du chapitre qui le précédait.
+fn placer_le_sommaire(chapitres: &mut Vec<Brouillon>) {
+    let Some(s) = chapitres
+        .iter()
+        .position(|c| est_titre_de_sommaire(&c.titre) && c.evenements.iter().any(est_lien_vers_titre))
+    else {
+        return;
+    };
+    if s < 2 {
+        return;
+    }
+    let mut sommaire = chapitres.remove(s);
+    let fin = fin_des_entrees(&sommaire.evenements).unwrap_or(sommaire.evenements.len());
+    let reste = sommaire.evenements.split_off(fin);
+    let ids_du_reste: Vec<&str> = reste
+        .iter()
+        .filter_map(|e| match e {
+            Event::Start(Tag::Heading { id: Some(id), .. }) => Some(&**id),
+            _ => None,
+        })
+        .collect();
+    let (partent, restent): (Vec<_>, Vec<_>) =
+        std::mem::take(&mut sommaire.sous_titres).into_iter().partition(|(id, _)| ids_du_reste.contains(&id.as_str()));
+    sommaire.sous_titres = restent;
+    let precedent = &mut chapitres[s - 1];
+    precedent.sous_titres.extend(partent);
+    precedent.evenements.extend(reste);
+    precedent.notes.append(&mut sommaire.notes);
+    chapitres.insert(1, sommaire);
+}
+
 pub fn decouper(markdown: &str, titre_livre: &str) -> Vec<Chapitre> {
     let parser = Parser::new_ext(markdown, Options::ENABLE_FOOTNOTES);
     let mut chapitres: Vec<Brouillon> = Vec::new();
@@ -95,10 +185,9 @@ pub fn decouper(markdown: &str, titre_livre: &str) -> Vec<Chapitre> {
             Event::End(TagEnd::Heading(niveau)) => {
                 if let Some((n, texte, position)) = dans_titre.take() {
                     let texte = texte.trim().to_string();
-                    // Identifiant unique dans tout le livre ; le chapitre courant sera
-                    // le prochain poussé.
+                    // Identifiant unique dans tout le livre, attribué dans l'ordre du
+                    // Markdown (comme le moteur) ; recensé une fois l'ordre final connu.
                     let ancre = ancres.attribuer(&texte);
-                    renvois.recenser_titre(&ancre, chapitres.len());
                     if let Event::Start(Tag::Heading { id, .. }) = &mut courant.evenements[position] {
                         *id = Some(CowStr::from(ancre.clone()));
                     }
@@ -131,8 +220,14 @@ pub fn decouper(markdown: &str, titre_livre: &str) -> Vec<Chapitre> {
     if courant.significatif || chapitres.is_empty() {
         chapitres.push(courant);
     }
+    placer_le_sommaire(&mut chapitres);
     for (i, c) in chapitres.iter_mut().enumerate() {
         c.preparer();
+        for e in &c.evenements {
+            if let Event::Start(Tag::Heading { id: Some(id), .. }) = e {
+                renvois.recenser_titre(id, i);
+            }
+        }
         renvois.recenser(i, &c.evenements, &c.notes);
     }
     chapitres.into_iter().enumerate().map(|(i, c)| c.finir(i, titre_livre, &mut renvois)).collect()

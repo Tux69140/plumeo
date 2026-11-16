@@ -297,3 +297,119 @@ fn epubcheck() {
     let s = std::process::Command::new("java").args(["-jar", &jar]).arg(&c).status().unwrap();
     assert!(s.success());
 }
+
+/// Titre (`<title>`) de chaque fichier de chapitre, dans l'ordre des fichiers.
+fn titres_des_chapitres(e: &[(String, Vec<u8>, zip::CompressionMethod)]) -> Vec<String> {
+    let mut noms: Vec<&String> =
+        e.iter().map(|(n, _, _)| n).filter(|n| n.starts_with("OEBPS/chap-")).collect();
+    noms.sort();
+    noms.iter()
+        .map(|n| {
+            let x = texte(e, n);
+            let debut = x.find("<title>").unwrap() + "<title>".len();
+            x[debut..x.find("</title>").unwrap()].to_string()
+        })
+        .collect()
+}
+
+const LIVRE_A_SOMMAIRE_DE_FIN: &str = "# Livre\n\ntexte\n\n# Ch 1\n\n[**Ch 1**](#t-ch-1) ailleurs…\n\n# Table des matières\n\n[**Ch 1**](#t-ch-1)\n\ncolophon\n";
+
+#[test]
+fn sommaire_de_fin_deplace_apres_la_page_de_titre() {
+    let (_d, c) = fabriquer(LIVRE_A_SOMMAIRE_DE_FIN, None);
+    let e = entrees(&c);
+    assert_eq!(titres_des_chapitres(&e), ["Livre", "Table des matières", "Ch 1"]);
+    let table = texte(&e, "OEBPS/chap-002.xhtml");
+    assert!(table.contains(r##"<a href="chap-003.xhtml#t-ch-1"><strong>Ch 1</strong></a>"##), "{table}");
+    assert!(!table.contains("colophon"), "{table}");
+    let ch1 = texte(&e, "OEBPS/chap-003.xhtml");
+    assert!(ch1.contains(r#"<h1 id="t-ch-1">Ch 1</h1>"#), "{ch1}");
+    // La partie qui suit la dernière entrée reste à sa place : fin du chapitre précédent.
+    let ailleurs = ch1.find("ailleurs").expect("texte du chapitre");
+    let colophon = ch1.find("<p>colophon</p>").expect("colophon resté en place");
+    assert!(ailleurs < colophon, "{ch1}");
+    assert!(ch1.contains(r##"<a href="chap-003.xhtml#t-ch-1"><strong>Ch 1</strong></a>"##), "{ch1}");
+}
+
+#[test]
+fn sommaire_deplace_la_nav_et_la_spine_suivent() {
+    let (_d, c) = fabriquer(LIVRE_A_SOMMAIRE_DE_FIN, None);
+    let e = entrees(&c);
+    let nav = texte(&e, "OEBPS/nav.xhtml");
+    assert!(nav.contains(r#"<li><a href="chap-001.xhtml">Livre</a>"#), "{nav}");
+    assert!(nav.contains(r#"<li><a href="chap-002.xhtml">Table des matières</a>"#), "{nav}");
+    assert!(nav.contains(r#"<li><a href="chap-003.xhtml">Ch 1</a>"#), "{nav}");
+    let livre = nav.find(">Livre<").unwrap();
+    let table = nav.find(">Table des matières</a>").unwrap();
+    let ch1 = nav.find(">Ch 1<").unwrap();
+    assert!(livre < table && table < ch1, "{nav}");
+    let opf = texte(&e, "OEBPS/content.opf");
+    let spine = &opf[opf.find("<spine").unwrap()..];
+    let i: Vec<usize> = ["chap-001", "chap-002", "chap-003"].iter().map(|c| spine.find(c).unwrap()).collect();
+    assert!(i[0] < i[1] && i[1] < i[2], "{spine}");
+}
+
+#[test]
+fn sommaire_en_majuscules_deplace_aussi() {
+    let md = "# Livre\n\nx\n\n# Ch 1\n\ny\n\n# TABLE DES MATIÈRES\n\n[Ch 1](#t-ch-1)\n";
+    let (_d, c) = fabriquer(md, None);
+    let e = entrees(&c);
+    assert_eq!(titres_des_chapitres(&e), ["Livre", "TABLE DES MATIÈRES", "Ch 1"]);
+    let md = "# Livre\n\nx\n\n# Ch 1\n\ny\n\n# SOMMAIRE\n\n[Ch 1](#t-ch-1)\n";
+    let (_d, c) = fabriquer(md, None);
+    assert_eq!(titres_des_chapitres(&entrees(&c)), ["Livre", "SOMMAIRE", "Ch 1"]);
+}
+
+#[test]
+fn sommaire_deja_en_deuxieme_position_ne_bouge_pas() {
+    let md = "# Livre\n\nx\n\n# Sommaire\n\n[Ch 1](#t-ch-1)\n\nsuite du sommaire\n\n# Ch 1\n\ny\n";
+    let (_d, c) = fabriquer(md, None);
+    let e = entrees(&c);
+    assert_eq!(titres_des_chapitres(&e), ["Livre", "Sommaire", "Ch 1"]);
+    let table = texte(&e, "OEBPS/chap-002.xhtml");
+    assert!(table.contains("<p>suite du sommaire</p>"), "{table}");
+    assert!(table.contains(r#"<a href="chap-003.xhtml#t-ch-1">Ch 1</a>"#), "{table}");
+}
+
+#[test]
+fn sommaire_sans_lien_interne_ne_bouge_pas() {
+    let md = "# Livre\n\nx\n\n# Ch 1\n\ny\n\n# Sommaire\n\nCh 1 ........ 5\n\n[Site](https://exemple.org)\n";
+    let (_d, c) = fabriquer(md, None);
+    let e = entrees(&c);
+    assert_eq!(titres_des_chapitres(&e), ["Livre", "Ch 1", "Sommaire"]);
+    assert!(texte(&e, "OEBPS/chap-003.xhtml").contains("Ch 1 ........ 5"));
+}
+
+#[test]
+fn livre_sans_sommaire_inchange() {
+    let md = "# Livre\n\nx\n\n# Ch 1\n\n[Ch 2](#t-ch-2)\n\n# Ch 2\n\nz\n";
+    let (_d, c) = fabriquer(md, None);
+    let e = entrees(&c);
+    assert_eq!(titres_des_chapitres(&e), ["Livre", "Ch 1", "Ch 2"]);
+    assert!(texte(&e, "OEBPS/chap-002.xhtml").contains(r#"<a href="chap-003.xhtml#t-ch-2">Ch 2</a>"#));
+}
+
+#[test]
+fn note_du_colophon_reste_en_place_avec_son_aller_retour() {
+    let md = "# Livre\n\nx\n\n# Ch 1\n\ny\n\n# Sommaire\n\n[Ch 1](#t-ch-1)\n\nColophon[^5-1].\n\n[^5-1]: Note du colophon.\n";
+    let (_d, c) = fabriquer(md, None);
+    let e = entrees(&c);
+    assert_eq!(titres_des_chapitres(&e), ["Livre", "Sommaire", "Ch 1"]);
+    let ch1 = texte(&e, "OEBPS/chap-003.xhtml");
+    assert!(ch1.contains(r##"<a epub:type="noteref" id="appel-5" href="#note-5"><sup>1</sup></a>"##), "{ch1}");
+    let aside = &ch1[ch1.find(r#"<aside epub:type="footnote" id="note-5">"#).expect("aside")..];
+    assert!(aside.contains("Note du colophon."), "{ch1}");
+    assert!(aside.contains(r##"<a href="#appel-5">↩</a>"##), "{ch1}");
+    assert!(!texte(&e, "OEBPS/chap-002.xhtml").contains("note-5"));
+}
+
+#[test]
+fn sous_titre_apres_le_sommaire_reste_en_place() {
+    let md = "# Livre\n\nx\n\n# Ch 1\n\ny\n\n# Sommaire\n\n[Ch 1](#t-ch-1)\n\n## Achevé d'imprimer\n\nz\n";
+    let (_d, c) = fabriquer(md, None);
+    let e = entrees(&c);
+    assert_eq!(titres_des_chapitres(&e), ["Livre", "Sommaire", "Ch 1"]);
+    assert!(texte(&e, "OEBPS/chap-003.xhtml").contains(r#"<h2 id="t-achevé-d-imprimer">"#));
+    let nav = texte(&e, "OEBPS/nav.xhtml");
+    assert!(nav.contains(r##"<a href="chap-003.xhtml#t-achevé-d-imprimer">Achevé d'imprimer</a>"##), "{nav}");
+}
