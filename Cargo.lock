@@ -590,6 +590,7 @@ dependencies = [
  "roxmltree",
  "tempfile",
  "thiserror",
+ "unicode-normalization",
  "zip",
 ]
 

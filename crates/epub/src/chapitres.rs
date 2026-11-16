@@ -1,6 +1,8 @@
 //! Lecture du Markdown interne et découpage en chapitres.
 
 use pulldown_cmark::{CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::char::is_combining_mark;
 
 use crate::xhtml;
 
@@ -52,32 +54,22 @@ fn est_ancre(e: &Event) -> bool {
     matches!(e, Event::Html(h) if h.trim_start().starts_with("<!-- @"))
 }
 
-/// Minuscules, sans accents ni ponctuation, ligatures œ et æ dépliées, espaces réduits.
+/// Minuscules, sans diacritiques, tout non-alphanumérique devient espace, espaces réduits.
+/// Copie exacte de `normaliser` du moteur (`titres.rs`).
 fn normaliser(s: &str) -> String {
-    let mut plie = String::with_capacity(s.len());
-    // Accents combinants (texte décomposé) retirés.
-    let minuscules = s.chars().flat_map(char::to_lowercase);
-    for c in minuscules.filter(|c| !('\u{300}'..='\u{36f}').contains(c)) {
-        match c {
-            'à' | 'â' | 'ä' | 'á' => plie.push('a'),
-            'é' | 'è' | 'ê' | 'ë' => plie.push('e'),
-            'î' | 'ï' | 'í' => plie.push('i'),
-            'ô' | 'ö' | 'ó' => plie.push('o'),
-            'ù' | 'û' | 'ü' | 'ú' => plie.push('u'),
-            'ÿ' => plie.push('y'),
-            'ç' => plie.push('c'),
-            'œ' => plie.push_str("oe"),
-            'æ' => plie.push_str("ae"),
-            c if c.is_alphanumeric() => plie.push(c),
-            _ => plie.push(' '),
-        }
-    }
-    plie.split_whitespace().collect::<Vec<_>>().join(" ")
+    let nettoye: String = s
+        .nfd()
+        .filter(|c| !is_combining_mark(*c))
+        .flat_map(char::to_lowercase)
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect();
+    nettoye.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Titre posé par le moteur sur un sommaire imprimé (`sommaire_cliquable`) : « Table des
-/// matières » ou « Sommaire », sans tenir compte de la casse, des accents ni de la
-/// ponctuation (« SOMMAIRE : »). Même décision que le moteur (vérifiée par un test).
+/// matières » ou « Sommaire », sans tenir compte de la casse, des diacritiques ni de la
+/// ponctuation (« SOMMAIRE : »). Même normalisation et même décision que le moteur
+/// (`est_titre_de_sommaire` de `titres.rs`), vérifiées par un test croisé.
 pub fn est_titre_de_sommaire(titre: &str) -> bool {
     matches!(normaliser(titre).as_str(), "table des matieres" | "sommaire")
 }
@@ -257,16 +249,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normaliser_replie_accents_et_ligatures() {
-        assert_eq!(
-            normaliser("À Â Ä É È Ê Ë Î Ï Ô Ö Ù Û Ü Ÿ Ç Œ Æ"),
-            "a a a e e e e i i o o u u u y c oe ae"
-        );
-        assert_eq!(
-            normaliser("à â ä é è ê ë î ï ô ö ù û ü ÿ ç œ æ"),
-            "a a a e e e e i i o o u u u y c oe ae"
-        );
+    fn normaliser_retire_diacritiques_et_ponctuation() {
+        assert_eq!(normaliser("  L’Âme,  d'été! "), "l ame d ete");
+        assert_eq!(normaliser("À Ä É È Ì Ò Õ Ù Ÿ Ç Š Ě"), "a a e e i o o u y c s e");
         // Texte décomposé (NFD) : accents combinants retirés.
-        assert_eq!(normaliser("Matie\u{300}res : sœur"), "matieres soeur");
+        assert_eq!(normaliser("Matie\u{300}res :"), "matieres");
     }
 }

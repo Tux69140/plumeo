@@ -372,6 +372,20 @@ fn sommaire_deja_en_deuxieme_position_ne_bouge_pas() {
 }
 
 #[test]
+fn sommaire_en_position_1_ne_bouge_pas() {
+    // Seuil : déjà juste après le premier chapitre, le sommaire garde tout son contenu,
+    // et le premier chapitre ne reçoit rien.
+    let md = "# Livre\n\nx\n\n# Sommaire\n\n[Ch 1](#t-ch-1)\n\napres les entrees\n\n# Ch 1\n\ny\n";
+    let (_d, c) = fabriquer(md, None);
+    let e = entrees(&c);
+    assert_eq!(titres_des_chapitres(&e), ["Livre", "Sommaire", "Ch 1"]);
+    let livre = texte(&e, "OEBPS/chap-001.xhtml");
+    assert!(!livre.contains("apres les entrees"), "{livre}");
+    let table = texte(&e, "OEBPS/chap-002.xhtml");
+    assert!(table.contains("<p>apres les entrees</p>"), "{table}");
+}
+
+#[test]
 fn sommaire_sans_lien_interne_ne_bouge_pas() {
     let md = "# Livre\n\nx\n\n# Ch 1\n\ny\n\n# Sommaire\n\nCh 1 ........ 5\n\n[Site](https://exemple.org)\n";
     let (_d, c) = fabriquer(md, None);
@@ -417,7 +431,7 @@ fn sous_titre_apres_le_sommaire_reste_en_place() {
 #[test]
 fn est_titre_de_sommaire_public() {
     let oui = ["Table des matières", "TABLE DES MATIÈRES", "Table des Matieres", "Sommaire", "SOMMAIRE"];
-    for oui in oui.into_iter().chain(["Sommaire :", "Tâble dès mätïères"]) {
+    for oui in oui.into_iter().chain(["Sommaire :", "Tâble dès mätïères", "Table des matìères"]) {
         assert!(plumeo_epub::est_titre_de_sommaire(oui), "« {oui} »");
     }
     for non in ["Table", "Sommaires et index", ""] {

@@ -2560,6 +2560,28 @@ mod tests {
         }
     }
 
+    /// Chaque caractère latin étendu (U+00C0–U+024F, U+1E00–U+1EFF) mis à la place de
+    /// chaque lettre de « table des matieres » et de « sommaire » : même décision des deux côtés.
+    #[test]
+    fn titre_de_sommaire_identique_pour_tout_caractere_latin_substitue() {
+        let mut ecarts = Vec::new();
+        for base in ["table des matieres", "sommaire"] {
+            let lettres: Vec<char> = base.chars().collect();
+            let latins = ('\u{c0}'..='\u{24f}').chain('\u{1e00}'..='\u{1eff}');
+            for c in latins {
+                for i in (0..lettres.len()).filter(|&i| lettres[i] != ' ') {
+                    let mut l = lettres.clone();
+                    l[i] = c;
+                    let texte: String = l.into_iter().collect();
+                    if est_titre_de_sommaire(&texte) != plumeo_epub::est_titre_de_sommaire(&texte) {
+                        ecarts.push(texte);
+                    }
+                }
+            }
+        }
+        assert!(ecarts.is_empty(), "{} écarts, dont {:?}", ecarts.len(), &ecarts[..ecarts.len().min(10)]);
+    }
+
     #[test]
     fn taille_corps_pondere_par_caracteres() {
         let blocs = vec![para(1, "court", 18.0, false, 1), corps(1, &texte_long()), para(1, "x", 12.2, false, 1)];
