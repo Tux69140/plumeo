@@ -47,10 +47,6 @@ struct Derogations {
     /// Pages où un bloc fait d'un seul nombre est admis (étiquette de schéma).
     #[serde(default)]
     nombres_isoles_pages: Vec<u32>,
-    /// Le titre du livre, déjà détecté comme premier titre `#`, suit quelques lignes de
-    /// couverture : seul le premier titre `#` doit alors être le titre du livre.
-    #[serde(default)]
-    titre_livre_apres_couverture: bool,
 }
 
 /// Attentes propres à un livre ; un champ absent ou `null` n'est pas vérifié.
@@ -233,16 +229,10 @@ fn titre_propose(doc: &DocumentPdf, chemin: &Path) -> String {
 }
 
 /// Vérifie que le premier bloc du Markdown est un titre `#` égal (en texte normalisé)
-/// au titre du livre ; renvoie la raison de l'échec sinon. Avec `apres_couverture`, des
-/// blocs de couverture peuvent le précéder : seul le premier titre `#` est examiné.
-fn verifier_titre_livre(blocs: &[BlocMd], titre_livre: &str, apres_couverture: bool) -> Result<(), String> {
+/// au titre du livre ; renvoie la raison de l'échec sinon.
+fn verifier_titre_livre(blocs: &[BlocMd], titre_livre: &str) -> Result<(), String> {
     let voulu = normaliser(titre_livre);
-    let premier = if apres_couverture {
-        blocs.iter().find(|b| matches!(b.genre, Genre::Titre(1)))
-    } else {
-        blocs.first()
-    };
-    match premier {
+    match blocs.first() {
         None => Err("Markdown sans titre du livre".into()),
         Some(b) if !matches!(b.genre, Genre::Titre(1)) => {
             Err(format!("le Markdown ne commence pas par un titre # : « {} » ({})", extrait(&b.texte), b.ancre))
@@ -313,7 +303,7 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
             echecs.push(format!("numéro de page resté dans le texte : « {} » ({})", b.texte, b.ancre));
         }
     }
-    if let Err(e) = verifier_titre_livre(&blocs, &titre_livre, d.is_some_and(|d| d.titre_livre_apres_couverture)) {
+    if let Err(e) = verifier_titre_livre(&blocs, &titre_livre) {
         echecs.push(e);
     }
     let longueurs: Vec<usize> = blocs
@@ -505,31 +495,21 @@ mod tests {
     #[test]
     fn titre_livre_en_tete_accepte() {
         let md = format!("{ANCRE}\n# Approche de la Cité céleste\n\n{ANCRE}\nUn paragraphe.\n");
-        assert_eq!(verifier_titre_livre(&lire_blocs(&md), "Approche de la cité Céleste", false), Ok(()));
+        assert_eq!(verifier_titre_livre(&lire_blocs(&md), "Approche de la cité Céleste"), Ok(()));
     }
 
     #[test]
     fn titre_livre_absent_refuse() {
         let md = format!("{ANCRE}\nUn paragraphe.\n\n{ANCRE}\n# Approche de la Cité céleste\n");
-        assert!(verifier_titre_livre(&lire_blocs(&md), "Approche de la Cité céleste", false).is_err());
-        assert!(verifier_titre_livre(&[], "Approche de la Cité céleste", false).is_err());
-    }
-
-    #[test]
-    fn titre_livre_apres_couverture_seulement_si_derogation() {
-        let md = format!("{ANCRE}\n**Rudolf Steiner**\n\n{ANCRE}\n# Connaissance\n");
-        let blocs = lire_blocs(&md);
-        assert!(verifier_titre_livre(&blocs, "Connaissance", false).is_err());
-        assert_eq!(verifier_titre_livre(&blocs, "Connaissance", true), Ok(()));
-        let autre = lire_blocs(&format!("{ANCRE}\n**Rudolf Steiner**\n\n{ANCRE}\n# Autre\n"));
-        assert!(verifier_titre_livre(&autre, "Connaissance", true).is_err());
+        assert!(verifier_titre_livre(&lire_blocs(&md), "Approche de la Cité céleste").is_err());
+        assert!(verifier_titre_livre(&[], "Approche de la Cité céleste").is_err());
     }
 
     #[test]
     fn titre_livre_different_ou_de_mauvais_niveau_refuse() {
         let autre = format!("{ANCRE}\n# Autre titre\n");
-        assert!(verifier_titre_livre(&lire_blocs(&autre), "Approche de la Cité céleste", false).is_err());
+        assert!(verifier_titre_livre(&lire_blocs(&autre), "Approche de la Cité céleste").is_err());
         let niveau2 = format!("{ANCRE}\n## Approche de la Cité céleste\n");
-        assert!(verifier_titre_livre(&lire_blocs(&niveau2), "Approche de la Cité céleste", false).is_err());
+        assert!(verifier_titre_livre(&lire_blocs(&niveau2), "Approche de la Cité céleste").is_err());
     }
 }

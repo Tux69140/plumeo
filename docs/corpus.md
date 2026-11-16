@@ -30,7 +30,7 @@ Communes à chaque livre :
 - ancres croissantes en (page, moitié) — les définitions de notes, déplacées en fin de
   chapitre par le Markdown interne, ne comptent pas ;
 - le Markdown commence par un titre `#` égal au titre du livre (premier bloc, texte
-  normalisé) — voir plus bas la dérogation du n° 6 ;
+  normalisé) ;
 - au moins 1 retrait si la série a des zones non nulles ;
 - epubcheck sans erreur (si `EPUBCHECK_JAR`).
 
@@ -73,15 +73,18 @@ mêmes décomptes. Chronique de l'Akasha passe ainsi de `titres_n1` 23 à 22 : s
 (signet) mène désormais à 12 entrées cliquables. Approche de la Cité céleste attend 22 entrées
 (17 chapitres et les 5 parties du chapitre 17).
 
-`derogations` (`raison`, `mediane_paragraphes_min`, `nombres_isoles_pages`,
-`titre_livre_apres_couverture`) assouplit
+`derogations` (`raison`, `mediane_paragraphes_min`, `nombres_isoles_pages`) assouplit
 une attente **commune** que le livre ne peut pas tenir, pour une raison mesurée et
 consignée ci-dessous ; la raison est affichée à chaque passage du test.
 
-Dérogation au titre du livre en tête : Connaissance (n° 6) commence par « Rudolf Steiner »
-(nom de l'auteur, en gras, p. 1g) avant le titre, déjà détecté comme premier titre `#` du
-livre ; `convertir_livre` ne déplace pas un titre existant. Pour ce livre, seul le premier
-titre `#` doit être le titre du livre (`titre_livre_apres_couverture`).
+Titre du livre déjà détecté : Connaissance (n° 6) commençait par « Rudolf Steiner » (nom de
+l'auteur, en gras, p. 1g) avant son titre, déjà détecté comme premier titre `#`. Un premier
+titre de niveau 1 égal au titre du livre, dans les 10 premières pages, remonte désormais en
+tête de sa (demi-)page comme un titre retrouvé dans les paragraphes : le livre commence par
+son titre et la dérogation `titre_livre_apres_couverture` est supprimée. La ligne de titre,
+pleine largeur, empêche la p. 1g d'être une page courte : un saut `* * *` laissé à la place
+du titre sépare « Rudolf Steiner » (p. 1g) de « Rudolf STEINER » (p. 1d), sans quoi le
+raccord des pages les collait.
 
 ## Séries
 
@@ -121,7 +124,7 @@ Les durées sont celles du dernier passage (2026-11-16, après les retours du co
 | 3 | pas de titre courant ; note `*` p. 36 ; 5 à 60 n1 | 0 titre courant ; 7 notes dont `*` p. 36 ; 14 n1 (les titres illisibles, `# Corps m\--`, `# np`, `# s`…, restent des paragraphes avec un point à vérifier) | 1,2 s |
 | 4 | signets, 22 titres (23 moins « SOMMAIRE », titre de service) | signets, 22 n1, 0 n2, 12 entrées de sommaire | 0,7 s |
 | 5 | signets, 4 n1 et 7 n2 | signets, 4 n1, 7 n2 | 0,3 s |
-| 6 | `g` et `d` ; pas de « 92 93 » ; ≥ 1 note appariée ; titre du livre en premier titre `#` (dérogation) | `g` et `d` ; 0 pied résiduel ; 5 notes appariées | 0,2 s |
+| 6 | `g` et `d` ; pas de « 92 93 » ; ≥ 1 note appariée ; titre du livre en tête | `g` et `d` ; 0 pied résiduel ; 5 notes appariées | 0,2 s |
 | 7 | se convertit ; EPUB valide | 28 n1 ; sommaire pp. 1-2 reconnu ; médiane 149 ; EPUB valide ; schéma p. 6 en texte (plan 6) | 1,6 s |
 | 8 | 19 n1 « CHAPITRE » ; pas de note p. 145 | 19 n1 « CHAPITRE » ; aucune note | 0,4 s |
 | 9 | ≥ 8 n1 « CHAPITRE » ; pas de note p. 367 ; < 60 s | 9 n1 dont 8 « CHAPITRE … » (+ « PREMIER CHAPITRE ») ; aucune note | 1,8 s |
