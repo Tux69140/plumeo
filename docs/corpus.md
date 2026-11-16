@@ -101,7 +101,7 @@ Conversion en `--release`, epubcheck 5.4.0 : **les 9 EPUB sont valides**, le tes
 | # | Attente | Mesure | Cause |
 |---|---|---|---|
 | 2 | médiane ≥ 80 | 35 car. (pp. 1-98 : 250 ; pp. 99-195 : 31) | Les pp. 99-195 sont un catalogue que le PDF lui-même met une ligne par paragraphe, deux colonnes d'origine entremêlées : rien à reconstituer côté moteur. |
-| 3 | pas de nombre isolé | « 0 » p. 37 | Étiquette d'un schéma (scan) : les schémas deviennent des images au plan 6. |
+| 3 | pas de nombre isolé | « 0 » p. 37, « 00 » p. 106, « 3 » et « 12 » p. 126 | Étiquettes de schémas (scan) : les schémas deviennent des images au plan 6. pp. 106 et 126 : elles étaient avalées par les chaînes de fusion de `raccorder_pages` (corrigées au retour du jalon 1) et ressortent seules. |
 | 7 | pas de nombre isolé | « 1 3 » et « 2 » p. 192 | Étiquettes du schéma des Hiérarchies : plan 6. |
 
 ### Attente du n° 1 corrigée : 27 titres et non 73

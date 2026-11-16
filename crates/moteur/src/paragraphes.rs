@@ -2,6 +2,9 @@
 //! raccord des paragraphes coupés par un saut de page.
 
 use std::collections::{BTreeSet, HashSet};
+use std::sync::LazyLock;
+
+use regex::Regex;
 
 use crate::blocs::{Bloc, Paragraphe, Segment};
 use crate::lignes::Ligne;
@@ -87,11 +90,31 @@ pub fn page_courte(corps: &[Ligne], notes: &[Ligne], bloc: BlocTexte) -> bool {
     bas_effectif - bas(corps) > ECART_PAGE_COURTE * bloc.interligne
 }
 
-/// Faut-il couper le paragraphe entre `prec` et `l` ?
-fn coupure(prec: &Ligne, l: &Ligne, bloc: BlocTexte) -> bool {
+/// Genre d'une énumération en tête de ligne (« 7. », « IV. »).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Enumeration {
+    Chiffres,
+    Romains,
+}
+
+static ENUMERATION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(?:(\d{1,3})|([IVXLC]{1,6}))\.\s").unwrap());
+
+/// Genre de l'énumération par laquelle commence le texte, s'il y en a une.
+fn enumeration(texte: &str) -> Option<Enumeration> {
+    let c = ENUMERATION.captures(texte)?;
+    Some(if c.get(1).is_some() { Enumeration::Chiffres } else { Enumeration::Romains })
+}
+
+/// Faut-il couper le paragraphe entre `prec` et `l` ? `premiere` est la première
+/// ligne du paragraphe en cours.
+fn coupure(premiere: &Ligne, prec: &Ligne, l: &Ligne, bloc: BlocTexte) -> bool {
     let largeur = bloc.x1 - bloc.x0;
     let retrait = |x0: f32| x0 - bloc.x0 > 0.03 * largeur;
-    !ligne_pleine(prec, bloc)
+    // Chaque entrée numérotée (sommaire, liste) reste un paragraphe à part.
+    let entree = enumeration(&l.texte()).is_some_and(|e| enumeration(&premiere.texte()) == Some(e));
+    entree
+        || !ligne_pleine(prec, bloc)
         || l.rect.y0 - prec.rect.y0 > 1.5 * bloc.interligne
         || (retrait(l.rect.x0) && !retrait(prec.rect.x0))
         || (l.taille() - prec.taille()).abs() > 0.5
@@ -276,7 +299,7 @@ pub fn paragraphes_page(
     let mut resultat = Vec::new();
     let mut debut = 0;
     for i in 1..=lignes.len() {
-        if i == lignes.len() || coupure(&lignes[i - 1], &lignes[i], bloc) {
+        if i == lignes.len() || coupure(&lignes[debut], &lignes[i - 1], &lignes[i], bloc) {
             resultat.push(paragraphe_de(&lignes[debut..i], page, moitie, vocab));
             debut = i;
         }
@@ -346,25 +369,33 @@ fn fusionner(p: &mut Paragraphe, suite: Paragraphe, vocab: &Vocabulaire) {
 
 /// Raccorde les paragraphes coupés par un saut de page. Les notes situées entre
 /// les deux sont sautées (elles gardent leur place) ; un titre bloque le raccord,
-/// de même qu'une page de sommaire d'un côté ou de l'autre (ses lignes restent seules).
+/// de même qu'une page de sommaire d'un côté ou de l'autre (ses lignes restent seules),
+/// ou deux entrées numérotées de même genre (« IV. » puis « V. »).
 pub fn raccorder_pages(blocs: Vec<Bloc>, vocab: &Vocabulaire, pages_sommaire: &BTreeSet<u32>) -> Vec<Bloc> {
     let mut sortie: Vec<Bloc> = Vec::new();
+    // (Demi-)page où finit le dernier paragraphe : celle de son ancre, ou de la suite qui
+    // lui a été collée. Seul le premier paragraphe de la (demi-)page suivante peut s'y raccorder.
+    let mut fin: Option<(u32, Moitie)> = None;
     for bloc in blocs {
         let Bloc::Paragraphe(suite) = bloc else {
             sortie.push(bloc);
             continue;
         };
+        let debut_suite = (suite.ancre.page, suite.ancre.moitie);
         let precedent = sortie.iter_mut().rev().find(|b| !matches!(b, Bloc::Note { .. }));
         if let Some(Bloc::Paragraphe(p)) = precedent {
-            let autre_page = (p.ancre.page, p.ancre.moitie) != (suite.ancre.page, suite.ancre.moitie);
+            let autre_page = fin.is_some_and(|f| f != debut_suite);
             let ouvert = dernier_caractere_de_texte(&p.segments)
                 .is_some_and(|c| !PONCTUATION_FINALE.contains(&c));
             let sommaire = pages_sommaire.contains(&p.ancre.page) || pages_sommaire.contains(&suite.ancre.page);
-            if autre_page && ouvert && !sommaire && !suite.texte_brut().is_empty() {
+            let entrees = enumeration(&suite.texte_brut()).is_some_and(|e| enumeration(&p.texte_brut()) == Some(e));
+            if autre_page && ouvert && !sommaire && !entrees && !suite.texte_brut().is_empty() {
                 fusionner(p, suite, vocab);
+                fin = Some(debut_suite);
                 continue;
             }
         }
+        fin = Some(debut_suite);
         sortie.push(Bloc::Paragraphe(suite));
     }
     sortie
@@ -674,6 +705,62 @@ mod tests {
         assert_eq!(texte_de(&raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new())[0]), "dites-vous bien");
         let blocs = vec![para("le Saint-", 4, 0.8), para("Esprit", 5, 0.1)];
         assert_eq!(texte_de(&raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new())[0]), "le Saint-Esprit");
+    }
+
+    /// Lignes pleines (sans blanc de fin de paragraphe) aux hauteurs données.
+    fn lignes_pleines(textes: &[&str]) -> Vec<Ligne> {
+        textes.iter().enumerate().map(|(i, t)| ligne(t, 0.1, 0.9, 0.10 + 0.03 * i as f32)).collect()
+    }
+
+    #[test]
+    fn entrees_numerotees_jamais_fusionnees() {
+        let v = Vocabulaire::default();
+        // Sommaire à interligne normal et lignes pleines : chaque entrée reste seule.
+        let p = paragraphes_page(&lignes_pleines(&["7. La porte", "8. Le fleuve", "13. La cité", "14. La fin"]), 5, Moitie::Entiere, BLOC, &v);
+        assert_eq!(textes(&p), vec!["7. La porte", "8. Le fleuve", "13. La cité", "14. La fin"]);
+        // Chiffres romains, avec une entrée sur deux lignes.
+        let p = paragraphes_page(&lignes_pleines(&["III. La pierre", "angulaire", "IV. Le fleuve"]), 5, Moitie::Entiere, BLOC, &v);
+        assert_eq!(textes(&p), vec!["III. La pierre angulaire", "IV. Le fleuve"]);
+    }
+
+    #[test]
+    fn enumeration_sans_effet_hors_d_une_entree_numerotee() {
+        let v = Vocabulaire::default();
+        // Le paragraphe en cours ne commençait pas par une énumération : pas de coupure.
+        let p = paragraphes_page(&lignes_pleines(&["il a dit", "2. que oui"]), 5, Moitie::Entiere, BLOC, &v);
+        assert_eq!(textes(&p), vec!["il a dit 2. que oui"]);
+        // Énumération d'un autre type : pas de coupure.
+        let p = paragraphes_page(&lignes_pleines(&["IV. Le fleuve", "5. de la vie"]), 5, Moitie::Entiere, BLOC, &v);
+        assert_eq!(p.len(), 1);
+        // Sans espace après le point, ce n'est pas une énumération (« 3.5 »).
+        let p = paragraphes_page(&lignes_pleines(&["1. Le total", "3.5 francs"]), 5, Moitie::Entiere, BLOC, &v);
+        assert_eq!(p.len(), 1);
+    }
+
+    #[test]
+    fn raccord_n_unit_pas_deux_entrees_numerotees() {
+        let blocs = vec![para("IV. Le fleuve de la vie", 5, 0.8), para("V. L'avènement", 6, 0.1)];
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new()).len(), 2);
+        // Une suite qui n'est pas une entrée se raccorde toujours.
+        let blocs = vec![para("IV. Le fleuve de la", 5, 0.8), para("vie éternelle", 6, 0.1)];
+        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new());
+        assert_eq!(texte_de(&r[0]), "IV. Le fleuve de la vie éternelle");
+    }
+
+    #[test]
+    fn raccord_sans_chaine_de_fusions() {
+        // Seul le dernier paragraphe d'une page se raccorde au premier de la suivante.
+        let blocs = vec![para("ce que", 4, 0.8), para("l'on dit", 5, 0.1), para("suite sans point", 5, 0.3)];
+        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new());
+        assert_eq!(r.len(), 2);
+        assert_eq!(texte_de(&r[0]), "ce que l'on dit");
+        assert_eq!(r[0].ancre().page, 4);
+        assert_eq!(texte_de(&r[1]), "suite sans point");
+        // Un paragraphe qui remplit toute une page se raccorde des deux côtés.
+        let blocs = vec![para("ce que", 4, 0.8), para("l'on dit", 5, 0.1), para("encore", 6, 0.1)];
+        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new());
+        assert_eq!(texte_de(&r[0]), "ce que l'on dit encore");
+        assert_eq!(r.len(), 1);
     }
 
     #[test]
