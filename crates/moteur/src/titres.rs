@@ -308,9 +308,28 @@ static NUMEROTE_ROMAIN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[IVXLCD
 /// Numéro en tête d'un texte de titre, suivi ou non d'un point (« I La pierre »).
 static NUMERO_EN_TETE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([IVXLCDM]+|\d+)\.?\s+").unwrap());
 /// Numéro en tête d'un titre visé par un sommaire, suivi d'un point (« I. », « IV. »,
-/// « 3. ») : « IL ÉTAIT… » ou « DIX CONFÉRENCES » ne commencent pas par un numéro.
+/// « 3. ») : « IL ÉTAIT… » ou « DIX CONFÉRENCES » ne commencent pas par un numéro. Voir
+/// `sans_numero_pointe`.
 static NUMERO_POINTE_EN_TETE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:[IVXLCDM]+|\d+)\.\s+").expect("motif valide"));
+    LazyLock::new(|| Regex::new(r"^([IVXLCDM]+|\d+)\.\s+").expect("motif valide"));
+/// Initiale en tête : lettre seule suivie d'un point (« G. JUNG »).
+static INITIALE_EN_TETE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\p{L}\.(?:\s|$)").expect("motif valide"));
+
+/// Texte d'un titre sans son numéro en tête suivi d'un point (`NUMERO_POINTE_EN_TETE`),
+/// ou `None` s'il n'en a pas. Un numéro romain doit être bien formé (`numero_seul` :
+/// pas « IIII. ») ; une lettre seule suivie d'une autre initiale n'est pas un numéro
+/// (« C. G. JUNG »).
+fn sans_numero_pointe(texte: &str) -> Option<&str> {
+    let tete = NUMERO_POINTE_EN_TETE.captures(texte)?;
+    let numero = tete.get(1)?.as_str();
+    let reste = &texte[tete.get(0)?.end()..];
+    let romain = !numero.starts_with(|c: char| c.is_ascii_digit());
+    let initiale = numero.chars().count() == 1 && INITIALE_EN_TETE.is_match(reste);
+    if romain && (numero_seul(numero).is_none() || initiale) {
+        return None;
+    }
+    Some(reste)
+}
 
 /// Genre et valeur d'un texte fait seulement d'un numéro bien formé, suivi ou non d'un
 /// point : un romain non vide (`ROMAIN_BIEN_FORME`) ou un nombre arabe de 1 à 999.
@@ -1479,7 +1498,7 @@ struct TitreCible {
 /// Titres que peuvent viser les entrées d'un sommaire imprimé (tous, sauf le titre du
 /// livre), par texte normalisé (`normaliser_titre`) et dans l'ordre du livre ;
 /// `sans_numero` : de même pour le texte des titres numérotés, sans le numéro en tête
-/// (`NUMERO_POINTE_EN_TETE`).
+/// (`sans_numero_pointe`).
 struct TitresCibles {
     par_texte: HashMap<String, Vec<TitreCible>>,
     sans_numero: HashMap<String, Vec<TitreCible>>,
@@ -1505,9 +1524,10 @@ impl TitresCibles {
                 if !norm.is_empty() {
                     cibles.par_texte.entry(norm).or_default().push(cible);
                 }
-                let court = NUMERO_POINTE_EN_TETE.replace(texte, "");
-                let norm = normaliser_titre(&court);
-                if court.len() < texte.len() && !norm.is_empty() {
+                if let Some(court) = sans_numero_pointe(texte)
+                    && let norm = normaliser_titre(court)
+                    && !norm.is_empty()
+                {
                     cibles.sans_numero.entry(norm).or_default().push(cible);
                 }
             }
@@ -1581,7 +1601,7 @@ struct EntreeLiee {
 struct SommairesReconnus {
     entrees: Vec<EntreeLiee>,
     titres_de_sommaire: Vec<usize>,
-    pages: BTreeSet<DemiPage>,
+    demi_pages: BTreeSet<DemiPage>,
 }
 
 /// Entrées reconnues sur la (demi-)page `lieu`, faite des `paragraphes`. Une entrée part
@@ -1674,8 +1694,8 @@ fn marquer_sommaires(pages: &mut [PageLue], blocs: &[Bloc]) {
     }
 }
 
-/// Sommaires du livre : suites maximales de (demi-)pages de sommaire contiguës (rangs
-/// dans `pages`).
+/// Suites maximales de (demi-)pages de sommaire contiguës (rangs dans `pages`), où l'on
+/// cherche le titre de chaque sommaire (avant la première entrée de la suite).
 fn suites_de_sommaire(pages: &[PageLue]) -> Vec<Range<usize>> {
     let mut suites: Vec<Range<usize>> = Vec::new();
     for r in (0..pages.len()).filter(|&r| pages[r].sommaire) {
@@ -1687,6 +1707,21 @@ fn suites_de_sommaire(pages: &[PageLue]) -> Vec<Range<usize>> {
     suites
 }
 
+/// Sommaires du livre pour le suivi des homonymes : suites maximales de (demi-)pages de
+/// sommaire de rangs consécutifs dans `pages` (rangs). Seules les (demi-)pages qui portent
+/// des paragraphes ont un rang : une page vide ne coupe pas un sommaire, mais le corps du
+/// livre sépare deux sommaires.
+fn groupes_d_homonymes(pages: &[PageLue]) -> Vec<Range<usize>> {
+    let mut groupes: Vec<Range<usize>> = Vec::new();
+    for r in (0..pages.len()).filter(|&r| pages[r].sommaire) {
+        match groupes.last_mut() {
+            Some(groupe) if groupe.end == r => groupe.end = r + 1,
+            _ => groupes.push(r..r + 1),
+        }
+    }
+    groupes
+}
+
 /// Reconnaissance des sommaires imprimés de `blocs` (voir `sommaire_cliquable`) : leurs
 /// (demi-)pages, leurs entrées et le titre visé par chacune, et leurs titres.
 fn reconnaitre_sommaires(blocs: &[Bloc], titre_livre: &str) -> SommairesReconnus {
@@ -1695,26 +1730,26 @@ fn reconnaitre_sommaires(blocs: &[Bloc], titre_livre: &str) -> SommairesReconnus
     marquer_sommaires(&mut pages, blocs);
     let suites = suites_de_sommaire(&pages);
 
-    // Entrées des (demi-)pages de sommaire, dans l'ordre des blocs, avec leur sommaire
-    // (rang dans `suites`) et leur (demi-)page.
-    let mut a_lier: Vec<(usize, &EntreeReconnue, DemiPage)> = suites
-        .iter()
+    // Entrées des (demi-)pages de sommaire, dans l'ordre des blocs, avec leur groupe
+    // (rang dans `groupes_d_homonymes`) et leur (demi-)page.
+    let mut a_lier: Vec<(usize, &EntreeReconnue, DemiPage)> = groupes_d_homonymes(&pages)
+        .into_iter()
         .enumerate()
-        .flat_map(|(sommaire, rangs)| pages[rangs.clone()].iter().map(move |page| (sommaire, page)))
-        .flat_map(|(sommaire, page)| page.entrees.iter().map(move |entree| (sommaire, entree, page.lieu)))
+        .flat_map(|(groupe, rangs)| pages[rangs].iter().map(move |page| (groupe, page)))
+        .flat_map(|(groupe, page)| page.entrees.iter().map(move |entree| (groupe, entree, page.lieu)))
         .collect();
     a_lier.sort_by_key(|(_, entree, _)| entree.couverts.start);
-    // Titres déjà visés, par sommaire : un second sommaire qui liste les mêmes homonymes
+    // Titres déjà visés, par groupe : un second sommaire qui liste les mêmes homonymes
     // les vise lui aussi dans l'ordre.
     let mut deja_vises: HashMap<usize, HashSet<usize>> = HashMap::new();
     let entrees: Vec<EntreeLiee> = a_lier
         .into_iter()
-        .map(|(sommaire, entree, lieu)| {
-            let vises = deja_vises.entry(sommaire).or_default();
-            let libres: Vec<&TitreCible> = entree.cibles.iter().filter(|c| !vises.contains(&c.indice)).collect();
+        .map(|(groupe, entree, lieu)| {
+            let pris = deja_vises.entry(groupe).or_default();
+            let libres: Vec<&TitreCible> = entree.cibles.iter().filter(|c| !pris.contains(&c.indice)).collect();
             let parmi = if libres.is_empty() { entree.cibles.iter().collect() } else { libres };
             let titre = parmi.iter().find(|c| c.lieu > lieu).or_else(|| parmi.first()).expect("titre visé").indice;
-            vises.insert(titre);
+            pris.insert(titre);
             EntreeLiee { couverts: entree.couverts.clone(), titre }
         })
         .collect();
@@ -1734,8 +1769,8 @@ fn reconnaitre_sommaires(blocs: &[Bloc], titre_livre: &str) -> SommairesReconnus
         })
         .collect();
 
-    let pages = pages.iter().filter(|p| p.sommaire).map(|p| p.lieu).collect();
-    SommairesReconnus { entrees, titres_de_sommaire, pages }
+    let demi_pages = pages.iter().filter(|p| p.sommaire).map(|p| p.lieu).collect();
+    SommairesReconnus { entrees, titres_de_sommaire, demi_pages }
 }
 
 /// Ajoute le paragraphe `suite` (même (demi-)page) à l'entrée `entree`. Les espaces de
@@ -1815,7 +1850,7 @@ fn lier_les_entrees(mut blocs: Vec<Bloc>, reconnus: &SommairesReconnus) -> Vec<B
 /// (`paragraphes_d_entree`, texte joint `texte_entree` : césure recollée, sans le numéro
 /// de page final ni les points de conduite) qui portent le texte d'un titre situé sur une
 /// autre (demi-)page (`normaliser_titre`), ou ce texte sans son numéro en tête
-/// suivi d'un point (`NUMERO_POINTE_EN_TETE` : « Les bases » vise « I. LES BASES », mais
+/// suivi d'un point (`sans_numero_pointe` : « Les bases » vise « I. LES BASES », mais
 /// « Était une fois » ne vise pas « IL ÉTAIT UNE FOIS ») ; l'entrée la plus longue qui
 /// vise un titre après sa (demi-)page l'emporte, à défaut la plus longue qui en vise un.
 ///
@@ -1829,12 +1864,12 @@ fn lier_les_entrees(mut blocs: Vec<Bloc>, reconnus: &SommairesReconnus) -> Vec<B
 ///
 /// Le titre visé est le premier de ce texte après la (demi-)page de l'entrée, à défaut le
 /// premier du livre, en sautant les titres déjà visés par une entrée précédente du même
-/// sommaire (suite de (demi-)pages de sommaire contiguës) tant qu'il en reste un libre
-/// (titres homonymes visés dans l'ordre, dans chaque sommaire) ; le titre du livre
-/// (premier titre de niveau 1, s'il porte `titre_livre`) n'est jamais visé. Chaque entrée
-/// devient une seule `EntreeSommaire` qui garde tout le texte de ses paragraphes, joints
-/// par une espace ou recollés sur une césure (`joindre_a_l_entree`), ancrée au premier, rectangle étendu aux
-/// autres ; le paragraphe « Table des matières » ou « Sommaire » placé juste avant la
+/// sommaire (`groupes_d_homonymes` : une page vide ne le coupe pas) tant qu'il en reste
+/// un libre (titres homonymes visés dans l'ordre, dans chaque sommaire) ; le titre du
+/// livre (premier titre de niveau 1, s'il porte `titre_livre`) n'est jamais visé. Chaque
+/// entrée devient une seule `EntreeSommaire` qui garde tout le texte de ses paragraphes,
+/// joints par une espace ou recollés sur une césure (`joindre_a_l_entree`), ancrée au
+/// premier, rectangle étendu aux autres ; le paragraphe « Table des matières » ou « Sommaire » placé juste avant la
 /// première entrée d'une suite de (demi-)pages de sommaire (notes et sauts passés), s'il
 /// n'est pas lui-même dans une entrée, devient un titre de niveau 1.
 ///
@@ -1846,10 +1881,10 @@ pub fn sommaire_cliquable(
 ) -> (Vec<Bloc>, Vec<PointAVerifier>, BTreeSet<DemiPage>) {
     let reconnus = reconnaitre_sommaires(&blocs, titre_livre);
     let blocs = lier_les_entrees(blocs, &reconnus);
-    let points = points_de_sommaire(&blocs, &reconnus.pages, |page| {
+    let points = points_de_sommaire(&blocs, &reconnus.demi_pages, |page| {
         format!("la page {page} est un sommaire imprimé : ses entrées renvoient aux titres")
     });
-    (blocs, points, reconnus.pages)
+    (blocs, points, reconnus.demi_pages)
 }
 
 #[cfg(test)]
@@ -3358,34 +3393,114 @@ mod tests {
         assert_eq!(points.iter().map(|p| p.ancre.page).collect::<Vec<_>>(), [2]);
     }
 
+    /// Rendu de l'entrée qui vise `titre`, dans `livre_a_conferences`, quand les
+    /// paragraphes du sommaire `premier` et `second` (retrouvés par leur texte) reçoivent
+    /// les segments `fin` et `debut`.
+    fn entree_jointe(premier: &str, fin: Vec<Segment>, second: &str, debut: Vec<Segment>, titre: &str) -> String {
+        let mut livre = livre_a_conferences(&SOMMAIRE_DE_CONFERENCES);
+        for (texte, segments) in [(premier, fin), (second, debut)] {
+            let Some(Bloc::Paragraphe(p)) =
+                livre.iter_mut().find(|b| matches!(&**b, Bloc::Paragraphe(p) if p.texte_brut() == texte))
+            else {
+                panic!("paragraphe « {texte} » attendu")
+            };
+            p.segments = segments;
+        }
+        let (blocs, _, _) = sommaire_cliquable(livre, "Mon livre");
+        let cible = format!("](#{})", crate::markdown::ancre_titre(titre));
+        rendu_sommaire(&blocs).into_iter().find(|r| r.ends_with(&cible)).expect("entrée liée")
+    }
+
+    fn segment(texte: &str) -> Segment {
+        Segment::Texte { texte: texte.into(), gras: false, italique: false }
+    }
+
     #[test]
     fn cesure_recollee_malgre_les_espaces_de_bord() {
         let attendu = lien("L'élaboration des concepts et le système des catégories chez Hegel.", CONFERENCES[2].1);
-        let texte = |t: &str| Segment::Texte { texte: t.into(), gras: false, italique: false };
         let avant = "L'élaboration des concepts et le système des caté-";
+        let apres = "gories chez Hegel.";
         let cas: [(Vec<Segment>, Vec<Segment>); 4] = [
             // Espace finale dans le dernier segment.
-            (vec![texte(&format!("{avant} "))], vec![texte("gories chez Hegel.")]),
+            (vec![segment(&format!("{avant} "))], vec![segment(apres)]),
             // Dernier segment fait seulement d'espaces.
-            (vec![texte(avant), texte("  ")], vec![texte("gories chez Hegel.")]),
+            (vec![segment(avant), segment("  ")], vec![segment(apres)]),
             // Espace en tête du paragraphe suivant.
-            (vec![texte(avant)], vec![texte(" gories chez Hegel.")]),
+            (vec![segment(avant)], vec![segment(&format!(" {apres}"))]),
             // Premier segment du paragraphe suivant fait seulement d'espaces.
-            (vec![texte(avant), texte(" ")], vec![texte(" "), texte("gories chez Hegel.")]),
+            (vec![segment(avant), segment(" ")], vec![segment(" "), segment(apres)]),
         ];
-        let rendus: Vec<String> = cas
-            .into_iter()
-            .map(|(fin, debut)| {
-                let mut livre = livre_a_conferences(&SOMMAIRE_DE_CONFERENCES);
-                for (k, segments) in [(8, fin), (9, debut)] {
-                    let Bloc::Paragraphe(p) = &mut livre[k] else { panic!("paragraphe attendu") };
-                    p.segments = segments;
-                }
-                let (blocs, _, _) = sommaire_cliquable(livre, "Mon livre");
-                rendu_sommaire(&blocs)[7].clone()
-            })
-            .collect();
+        let rendus: Vec<String> =
+            cas.into_iter().map(|(fin, debut)| entree_jointe(avant, fin, apres, debut, CONFERENCES[2].1)).collect();
         assert_eq!(rendus, vec![attendu; 4]);
+    }
+
+    #[test]
+    fn jonction_sans_cesure_une_seule_espace_malgre_les_espaces_de_bord() {
+        let attendu = lien("Jugements analytiques et jugements synthétiques (Logique II)", CONFERENCES[1].1);
+        let avant = "Jugements analytiques et jugements synthétiques";
+        let apres = "(Logique II)";
+        let cas: [(Vec<Segment>, Vec<Segment>); 2] = [
+            // Espaces de bord dans les segments de texte.
+            (vec![segment(&format!("{avant}  "))], vec![segment(&format!(" {apres}"))]),
+            // Segments faits seulement d'espaces, des deux côtés.
+            (vec![segment(avant), segment("  ")], vec![segment(" "), segment(apres)]),
+        ];
+        let rendus: Vec<String> =
+            cas.into_iter().map(|(fin, debut)| entree_jointe(avant, fin, apres, debut, CONFERENCES[1].1)).collect();
+        assert_eq!(rendus, vec![attendu; 2]);
+    }
+
+    #[test]
+    fn homonymes_d_un_sommaire_coupe_par_une_page_vide_visent_dans_l_ordre() {
+        // Sommaire en p3 et p5 ; la p4 ne porte aucun paragraphe : c'est un seul sommaire,
+        // et ses deux « La pensée » visent IX puis X.
+        let mut blocs = vec![titre_en(1, 1, "Mon livre")];
+        for (page, entrees) in [(3, ["Alpha 10", "Beta 11", "La pensée 12"]), (5, ["Gamma 13", "Delta 14", "La pensée 20"])] {
+            for (k, texte) in entrees.into_iter().enumerate() {
+                blocs.push(para_en(page, 100 + 40 * k as u16, texte, false));
+            }
+        }
+        for (page, titre) in
+            [(10, "Alpha"), (11, "Beta"), (12, "IX. La pensée"), (13, "Gamma"), (14, "Delta"), (20, "X. La pensée")]
+        {
+            blocs.push(titre_en(1, page, titre));
+            blocs.push(corps(page, &texte_long()));
+        }
+        let (blocs, _, demi_pages) = sommaire_cliquable(blocs, "Mon livre");
+        assert_eq!(demi_pages, BTreeSet::from([(3, Moitie::Entiere), (5, Moitie::Entiere)]));
+        let rendu = rendu_sommaire(&blocs);
+        assert_eq!(rendu[3], lien("La pensée 12", "IX. La pensée"));
+        assert_eq!(rendu[6], lien("La pensée 20", "X. La pensée"));
+    }
+
+    #[test]
+    fn initiales_et_romains_mal_formes_ne_sont_pas_des_numeros() {
+        let blocs = vec![
+            para_en(2, 100, "G. Jung 5", false),
+            para_en(2, 140, "La suite 6", false),
+            para_en(2, 180, "Mal formé 7", false),
+            para_en(2, 220, "Alpha 8", false),
+            para_en(2, 260, "Beta 9", false),
+            titre_en(1, 5, "C. G. JUNG"),
+            titre_en(1, 6, "V. LA SUITE"),
+            titre_en(1, 7, "IIII. MAL FORMÉ"),
+            titre_en(1, 8, "XIV. ALPHA"),
+            titre_en(1, 9, "Beta"),
+        ];
+        let (blocs, _, _) = sommaire_cliquable(blocs, "");
+        assert_eq!(
+            rendu_sommaire(&blocs)[..5],
+            [
+                // « C. » suivi d'une autre initiale : pas un numéro.
+                "G. Jung 5".to_string(),
+                lien("La suite 6", "V. LA SUITE"),
+                // « IIII » n'est pas un romain bien formé.
+                "Mal formé 7".to_string(),
+                lien("Alpha 8", "XIV. ALPHA"),
+                lien("Beta 9", "Beta"),
+            ]
+        );
     }
 
     #[test]
