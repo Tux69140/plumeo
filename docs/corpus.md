@@ -117,28 +117,29 @@ Aucun livre n'a eu besoin d'une autre série.
   corps. La zone part, sur chaque page, à mi-chemin entre la dernière ligne de corps
   (≥ 10 pt) et la première ligne de note (≈ 9 pt).
 
-## Résultats (2026-11-10)
+## Résultats (2026-11-16)
 
 Conversion en `--release`, epubcheck 5.4.0 : **les 9 EPUB sont valides**, le test passe.
-Les durées sont celles du dernier passage (2026-11-16, après les retours du contrôle visuel).
+Mesures et durées du dernier passage (2026-11-16, vague finale des retours du contrôle
+visuel).
 
 | # | Attendu | Mesuré | Durée |
 |---|---|---|---|
-| 1 | signets, ~~73~~ ~~27~~ **17** n1 + 5 n2 dont « VISITE À PATMOS » (voir plus bas) ; ≥ 46 notes appariées | signets, 17 n1 + 5 n2 (« 1 VISITE À PATMOS »…) ; 46 notes appariées ; médiane 419 car. | 0,3 s |
-| 2 | gras-majuscules, 10 n1 tous à partir de la p. 19, dont « LES 4 ÉLÉMENTS », « LA GENÈSE », « LUCIFER ET LE CHRIST » (attente réécrite, voir plus bas) | gras-majuscules, les 10 ouvertures du corps (pp. 19, 26, 31, 32, 33, 36, 38, 40, 53, 56) ; 29 n2 ; 48 titres courants retirés ; résumé pp. 6-11 en sommaire ; médiane **35** (dérogation) | 0,8 s |
-| 3 | pas de titre courant ; note `*` p. 36 ; 5 à 60 n1 | 0 titre courant ; 7 notes dont `*` p. 36 ; 14 n1 (les titres illisibles, `# Corps m\--`, `# np`, `# s`…, restent des paragraphes avec le point « texte peu plausible pour un titre (OCR, schéma, code) : non retenu ») | 1,2 s |
-| 4 | signets, 22 titres (23 moins « SOMMAIRE », titre de service) | signets, 22 n1, 0 n2, 12 entrées de sommaire | 0,7 s |
-| 5 | signets, 4 n1 et 7 n2 | signets, 4 n1, 7 n2 | 0,3 s |
-| 6 | `g` et `d` ; pas de « 92 93 » ; ≥ 1 note appariée ; titre du livre en tête | `g` et `d` ; 0 pied résiduel ; 5 notes appariées | 0,2 s |
-| 7 | se convertit ; EPUB valide | 28 n1 ; sommaire pp. 1-2 reconnu ; médiane 149 ; EPUB valide ; schéma p. 6 en texte (plan 6) | 1,6 s |
-| 8 | 19 n1 « CHAPITRE » ; pas de note p. 145 | 19 n1 « CHAPITRE » ; aucune note | 0,4 s |
-| 9 | ≥ 8 n1 « CHAPITRE » ; pas de note p. 367 ; < 60 s | 9 n1 dont 8 « CHAPITRE … » (+ « PREMIER CHAPITRE ») ; aucune note | 1,8 s |
+| 1 | signets, ~~73~~ ~~27~~ **17** n1 + 5 n2 dont « VISITE À PATMOS » (voir plus bas) ; ≥ 46 notes appariées | signets, 17 n1 + 5 n2 (« 1 VISITE À PATMOS »…) ; 22 entrées de sommaire ; 46 notes appariées ; médiane 569 car. | 0,3 s |
+| 2 | gras-majuscules, 10 n1 tous à partir de la p. 19, dont « LES 4 ÉLÉMENTS », « LA GENÈSE », « LUCIFER ET LE CHRIST » (attente réécrite, voir plus bas) | gras-majuscules, les 10 ouvertures du corps (pp. 19, 26, 31, 32, 33, 36, 38, 40, 53, 56) ; 24 n2 ; 48 titres courants retirés ; résumé pp. 6-11 en sommaire, dont p. 11 aux 4 entrées liées ; médiane **32** (dérogation) | 0,2 s |
+| 3 | pas de titre courant ; note `*` p. 36 ; 5 à 60 n1 | 0 titre courant ; 7 notes dont `*` p. 36 ; 14 n1 (les titres illisibles, `# Corps m\--`, `# np`, `# s`…, restent des paragraphes avec le point « texte peu plausible pour un titre (OCR, schéma, code) : non retenu ») ; médiane 282 | 1,3 s |
+| 4 | signets, 22 titres (23 moins « SOMMAIRE », titre de service) | signets, 22 n1, 0 n2, 12 entrées de sommaire ; médiane 603 | 0,7 s |
+| 5 | signets, 4 n1 et 7 n2 | signets, 4 n1, 7 n2, 5 entrées de sommaire ; médiane 456 | 0,3 s |
+| 6 | `g` et `d` ; pas de « 92 93 » ; ≥ 1 note appariée ; titre du livre en tête | `g` et `d` ; 0 pied résiduel ; 5 notes appariées ; titre du livre en tête ; médiane 114 | 0,3 s |
+| 7 | se convertit ; EPUB valide | 28 n1 ; sommaire pp. 1-2 reconnu ; médiane 123 ; EPUB valide ; schéma p. 6 en texte (plan 6) | 0,7 s |
+| 8 | 19 n1 « CHAPITRE » ; pas de note p. 145 | 19 n1 « CHAPITRE » ; aucune note ; médiane 183 | 0,5 s |
+| 9 | ≥ 8 n1 « CHAPITRE » ; pas de note p. 367 ; < 60 s | 9 n1 dont 8 « CHAPITRE … » (+ « PREMIER CHAPITRE ») ; aucune note ; médiane 258 | 1,7 s |
 
 ### Dérogations (attentes communes non tenables)
 
 | # | Attente | Mesure | Cause |
 |---|---|---|---|
-| 2 | médiane ≥ 80 | 35 car. (pp. 1-98 : 250 ; pp. 99-195 : 31) | Les pp. 99-195 sont un catalogue que le PDF lui-même met une ligne par paragraphe, deux colonnes d'origine entremêlées : rien à reconstituer côté moteur. |
+| 2 | médiane ≥ 80 | 32 car. (pp. 1-98 : 223 ; pp. 99-195 : 30) | Les pp. 99-195 sont un catalogue que le PDF lui-même met une ligne par paragraphe, deux colonnes d'origine entremêlées : rien à reconstituer côté moteur. |
 | 3 | pas de nombre isolé | « 0 » p. 37, « 00 » p. 106, « 3 » et « 12 » p. 126 | Étiquettes de schémas (scan) : les schémas deviennent des images au plan 6. pp. 106 et 126 : elles étaient avalées par les chaînes de fusion de `raccorder_pages` (corrigées au retour du jalon 1) et ressortent seules. |
 | 7 | pas de nombre isolé | « 1 3 » et « 2 » p. 192 | Étiquettes du schéma des Hiérarchies : plan 6. |
 

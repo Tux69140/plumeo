@@ -10,7 +10,7 @@
                   "titres_contiennent": ["LES 4 ÉLÉMENTS", "LA GENÈSE", "LUCIFER ET LE CHRIST"],
                   "prefixe_n1": null, "n1_min": null, "n1_page_min": 19, "n2": null, "entrees_sommaire": 4, "notes_pages": [],
                   "sans_notes_pages": [], "absent_regex": [], "moities": false },
-    "derogations": { "raison": "pp. 99-195 : catalogue dont le PDF met chaque ligne dans son propre paragraphe (médiane 31 car. ; 250 sur pp. 1-98)",
+    "derogations": { "raison": "pp. 99-195 : catalogue dont le PDF met chaque ligne dans son propre paragraphe (médiane 30 car. ; 223 sur pp. 1-98)",
                      "mediane_paragraphes_min": 30 } },
   { "fichier": "omraam/pdf/L'alchimie_spirituelle_Tome_2_Omraam_Mikhaël_Aïvanhov.pdf",
     "serie": "prosveta-scan", "titres": "auto",
