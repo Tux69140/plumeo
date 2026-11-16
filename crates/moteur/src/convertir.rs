@@ -15,7 +15,7 @@ use crate::paragraphes::{Vocabulaire, mesurer_bloc, nettoyer_sauts, page_courte,
 use crate::pdf::DocumentPdf;
 use crate::points::{GenrePoint, PointAVerifier};
 use crate::reglages::{ReglagesSerie, SourceTitres};
-use crate::titres::detecter_titres;
+use crate::titres::{detecter_titres, placer_titre_livre};
 use crate::zones::{PageClassee, Retrait, Role, classer_lignes};
 
 #[derive(Debug, Serialize)]
@@ -71,9 +71,12 @@ fn corps_de(lues: &[PageLue]) -> Vec<Vec<Ligne>> {
     lues.iter().map(|l| l.classee.corps.clone()).collect()
 }
 
+/// Convertit tout le livre en Markdown ancré. `titre_livre` (titre retenu pour l'EPUB)
+/// devient le premier titre de niveau 1 du Markdown ; vide, il est ignoré.
 pub fn convertir_livre(
     doc: &DocumentPdf,
     reglages: &ReglagesSerie,
+    titre_livre: &str,
     forcer_titres: Option<SourceTitres>,
     progression: &mut dyn FnMut(u32, u32),
 ) -> Result<Conversion, ErreurMoteur> {
@@ -131,6 +134,9 @@ pub fn convertir_livre(
     let (blocs, pts, source_titres, retraits_titres, illisibles) = detecter_titres(blocs, &doc.signets(), nb_pages, source);
     points.extend(pts);
     retraits.extend(retraits_titres);
+    // Avant le raccord des pages (le titre ne s'y recolle pas) et le nettoyage des
+    // sauts (aucun saut ne reste contre lui).
+    let blocs = placer_titre_livre(blocs, titre_livre);
     let (blocs, retraits_notes, pts) = notes_regroupees(blocs, &mut etiqueteuse, &vocab);
     retraits.extend(retraits_notes);
     points.extend(pts);

@@ -107,7 +107,7 @@ fn convertir(
     let titre = nettoyer_chaine(&titre.unwrap_or(titre_propose));
     let auteur = nettoyer_chaine(&auteur.unwrap_or(auteur_propose));
 
-    let conversion = convertir_livre(&doc, &reglages, forcer, &mut |p, total| {
+    let conversion = convertir_livre(&doc, &reglages, &titre, forcer, &mut |p, total| {
         eprint!("\rpage {p}/{total}");
     })?;
     eprintln!();

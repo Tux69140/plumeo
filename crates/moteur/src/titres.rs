@@ -26,6 +26,8 @@ const TOLERANCE_TAILLE: f32 = 0.5;
 const ETENDUE_NIVEAU: f32 = 1.0;
 /// Nombre de titres à partir duquel une taille (ou le mot « chapitre ») fait un niveau.
 const MIN_TITRES_NIVEAU: usize = 3;
+/// Pages du début du livre où chercher le titre du livre.
+const PAGES_TITRE_LIVRE: u32 = 10;
 
 fn arrondi_demi(taille: f32) -> f32 {
     (taille * 2.0).round() / 2.0
@@ -942,6 +944,54 @@ pub fn detecter_titres(
     (blocs, points, effective, retraits, illisibles)
 }
 
+/// Titre du livre en tête du Markdown (titre de niveau 1). Il est cherché, comme un
+/// signet, dans les blocs qui précèdent le premier titre de niveau 1 et au plus dans
+/// les `PAGES_TITRE_LIVRE` premières pages : la suite de paragraphes qui le porte
+/// exactement devient ce titre, placé avant les autres blocs de sa (demi-)page (le nom
+/// d'auteur au-dessus passe après). Introuvable, il est inséré au début, ancré à la
+/// page 1 entière. Rien à faire si le titre est vide ou s'il est déjà le premier titre
+/// de niveau 1. Le texte du titre est `titre_livre` tel quel.
+pub fn placer_titre_livre(mut blocs: Vec<Bloc>, titre_livre: &str) -> Vec<Bloc> {
+    let titre = titre_livre.trim();
+    let cible = normaliser_titre(titre);
+    if cible.is_empty() {
+        return blocs;
+    }
+    let premier_n1 = blocs.iter().position(|b| matches!(b, Bloc::Titre { niveau: 1, .. }));
+    if let Some(Bloc::Titre { texte, .. }) = premier_n1.map(|i| &blocs[i])
+        && normaliser_titre(texte) == cible
+    {
+        return blocs;
+    }
+    let premier_n1 = premier_n1.unwrap_or(blocs.len());
+    let fenetre = blocs[..premier_n1]
+        .iter()
+        .position(|b| b.ancre().page > PAGES_TITRE_LIVRE)
+        .unwrap_or(premier_n1);
+    let fenetre = &blocs[..fenetre];
+    let index = IndexTitres::new(fenetre);
+    let candidats = index.candidats(&cible);
+    let pages: BTreeSet<u32> = fenetre.iter().map(|b| b.ancre().page).collect();
+    // Seule une correspondance exacte est retenue : un paragraphe qui dit plus que le
+    // titre garde son texte.
+    let trouve = pages.into_iter().find_map(|page| {
+        chercher_signet(fenetre, &index, &candidats, &cible, page, &HashSet::new(), &BTreeSet::new())
+            .filter(|(_, _, texte)| normaliser_titre(texte) == cible)
+    });
+    let (position, ancre) = match trouve {
+        Some((debut, fin, _)) => {
+            let ancre = blocs[debut].ancre();
+            let meme_page = |b: &Bloc| (b.ancre().page, b.ancre().moitie) == (ancre.page, ancre.moitie);
+            let tete = blocs[..debut].iter().rposition(|b| !meme_page(b)).map_or(0, |i| i + 1);
+            blocs.drain(debut..fin);
+            (tete, ancre)
+        }
+        None => (0, Ancre { page: 1, moitie: Moitie::Entiere, rect: [0, 0, 1000, 1000] }),
+    };
+    blocs.insert(position, Bloc::Titre { niveau: 1, texte: titre.to_string(), ancre });
+    blocs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1672,5 +1722,100 @@ mod tests {
         let (blocs, points, _, _, _) = detecter_titres(blocs, &[], 3, SourceTitres::Taille);
         assert_eq!(titres(&blocs).len(), 2);
         assert!(points.iter().all(|p| p.genre != GenrePoint::TitreSuspect));
+    }
+
+    fn para_en(page: u32, y: u16, texte: &str, gras: bool) -> Bloc {
+        Bloc::Paragraphe(Paragraphe {
+            segments: vec![Segment::Texte { texte: texte.into(), gras, italique: false }],
+            ancre: Ancre { page, moitie: Moitie::Entiere, rect: [100, y, 900, y + 30] },
+            taille: 14.0,
+            tout_gras: gras,
+            nb_lignes: 1,
+        })
+    }
+
+    fn texte_de(bloc: &Bloc) -> String {
+        match bloc {
+            Bloc::Paragraphe(p) => p.texte_brut(),
+            Bloc::Titre { niveau, texte, .. } => format!("{} {texte}", "#".repeat(*niveau as usize)),
+            Bloc::Note { marqueur, .. } => format!("[{marqueur}]"),
+            Bloc::Saut { .. } => "* * *".into(),
+        }
+    }
+
+    #[test]
+    fn titre_du_livre_retrouve_sur_deux_paragraphes() {
+        let blocs = vec![
+            para_en(1, 500, "Éditions Prosveta", false),
+            Bloc::Saut { ancre: Ancre { page: 2, moitie: Moitie::Entiere, rect: [100, 100, 900, 130] } },
+            para_en(2, 100, "Omraam Mikhaël Aïvanhov", true),
+            para_en(2, 300, "Approche de", true),
+            para_en(2, 340, "la Cité céleste", true),
+            para_en(2, 600, "Collection Izvor", false),
+            para_en(3, 100, "Approche de la Cité céleste", false),
+            Bloc::Titre { niveau: 1, texte: "Chapitre premier".into(), ancre: ancre(5) },
+            corps(5, &texte_long()),
+        ];
+        let blocs = placer_titre_livre(blocs, "Approche de la Cité céleste");
+        let textes: Vec<String> = blocs.iter().map(texte_de).collect();
+        assert_eq!(
+            textes,
+            [
+                "Éditions Prosveta",
+                "# Approche de la Cité céleste",
+                "* * *",
+                "Omraam Mikhaël Aïvanhov",
+                "Collection Izvor",
+                "Approche de la Cité céleste",
+                "# Chapitre premier",
+                texte_long().as_str(),
+            ]
+        );
+        assert_eq!(blocs[1].ancre(), Ancre { page: 2, moitie: Moitie::Entiere, rect: [100, 300, 900, 330] });
+    }
+
+    #[test]
+    fn titre_du_livre_introuvable_insere_en_tete() {
+        let blocs = vec![
+            para_en(1, 300, "L’ALCH1MIE SP1R1TUELLE", true),
+            Bloc::Titre { niveau: 1, texte: "Chapitre premier".into(), ancre: ancre(3) },
+            // Après le premier titre de niveau 1 : hors de la fenêtre de recherche.
+            para_en(3, 300, "L’alchimie spirituelle", true),
+        ];
+        let blocs = placer_titre_livre(blocs, "L’alchimie spirituelle");
+        assert_eq!(
+            blocs.iter().map(texte_de).collect::<Vec<_>>(),
+            ["# L’alchimie spirituelle", "L’ALCH1MIE SP1R1TUELLE", "# Chapitre premier", "L’alchimie spirituelle"]
+        );
+        assert_eq!(blocs[0].ancre(), Ancre { page: 1, moitie: Moitie::Entiere, rect: [0, 0, 1000, 1000] });
+    }
+
+    #[test]
+    fn titre_du_livre_cherche_dans_les_dix_premieres_pages() {
+        let blocs = vec![corps(1, &texte_long()), para_en(11, 300, "Mon livre", true), corps(11, &texte_long())];
+        let blocs = placer_titre_livre(blocs, "Mon livre");
+        assert_eq!(texte_de(&blocs[0]), "# Mon livre");
+        assert_eq!(blocs[0].ancre().page, 1);
+        assert_eq!(texte_de(&blocs[2]), "Mon livre");
+    }
+
+    #[test]
+    fn titre_du_livre_jamais_pris_dans_un_paragraphe_plus_long() {
+        let blocs = vec![para_en(2, 300, "Mon livre et autres textes", true), corps(2, &texte_long())];
+        let blocs = placer_titre_livre(blocs, "Mon livre");
+        assert_eq!(texte_de(&blocs[0]), "# Mon livre");
+        assert_eq!(blocs[0].ancre().page, 1);
+        assert_eq!(texte_de(&blocs[1]), "Mon livre et autres textes");
+    }
+
+    #[test]
+    fn titre_du_livre_vide_ou_deja_premier_titre() {
+        let blocs = vec![para_en(1, 300, "Mon livre", true), corps(1, &texte_long())];
+        assert_eq!(placer_titre_livre(blocs.clone(), " ").len(), 2);
+        let deja = vec![
+            Bloc::Titre { niveau: 1, texte: "MON LIVRE".into(), ancre: ancre(1) },
+            corps(1, &texte_long()),
+        ];
+        assert_eq!(placer_titre_livre(deja, "Mon livre").iter().map(texte_de).collect::<Vec<_>>()[0], "# MON LIVRE");
     }
 }

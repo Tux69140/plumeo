@@ -49,6 +49,7 @@ fn cli_convertit_un_pdf_fabrique() {
     assert!(archive.len() > 2);
     let md = std::fs::read_to_string(sortie.join(format!("{base}.md"))).unwrap();
     assert!(md.contains("# CHAPITRE UN"), "{md}");
+    assert!(md.starts_with("<!-- @p1 0,0,1000,1000 -->\n# Mon petit livre\n"), "titre du livre en tête : {md}");
     let resume = String::from_utf8_lossy(&r.stdout);
     assert!(resume.contains("2 pages"), "{resume}");
 }

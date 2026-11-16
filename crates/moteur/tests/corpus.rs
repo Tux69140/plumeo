@@ -14,9 +14,11 @@ use std::time::Instant;
 
 use plumeo_epub::{Metadonnees, generer_epub};
 use plumeo_moteur::convertir_livre;
+use plumeo_moteur::metadonnees::proposer;
 use plumeo_moteur::modele::{Ancre, Moitie};
-use plumeo_moteur::pdf::DocumentPdf;
+use plumeo_moteur::pdf::{DocumentPdf, nettoyer_chaine};
 use plumeo_moteur::reglages::{ReglagesSerie, SourceTitres, Zones};
+use plumeo_moteur::titres::normaliser;
 use plumeo_moteur::zones::est_numero_page;
 use regex::Regex;
 use serde::Deserialize;
@@ -213,6 +215,12 @@ fn source_texte(s: SourceTitres) -> String {
     serde_json::to_value(s).unwrap().as_str().unwrap_or("?").to_string()
 }
 
+/// Titre du livre proposé comme par la CLI : métadonnées du PDF et nom du fichier.
+fn titre_propose(doc: &DocumentPdf, chemin: &Path) -> String {
+    let nom: String = chemin.file_stem().map(|s| s.to_string_lossy().nfc().collect()).unwrap_or_default();
+    nettoyer_chaine(&proposer(&doc.meta(), &nom).0)
+}
+
 fn epubcheck(jar: &str, markdown: &str, nom: &str) -> Result<(), String> {
     let dossier = tempfile::tempdir().map_err(|e| e.to_string())?;
     let chemin = dossier.path().join("livre.epub");
@@ -250,9 +258,12 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
         Err(e) => return vec![e.to_string()],
     };
     let forcer = (entree.titres != SourceTitres::Auto).then_some(entree.titres);
+    let mut titre_livre = String::new();
     let debut = Instant::now();
-    let conversion = DocumentPdf::ouvrir(&chemin)
-        .and_then(|doc| convertir_livre(&doc, &reglages, forcer, &mut |_, _| {}));
+    let conversion = DocumentPdf::ouvrir(&chemin).and_then(|doc| {
+        titre_livre = titre_propose(&doc, &chemin);
+        convertir_livre(&doc, &reglages, &titre_livre, forcer, &mut |_, _| {})
+    });
     let duree = debut.elapsed().as_secs_f64();
     let conversion = match conversion {
         Ok(c) => c,
@@ -305,7 +316,13 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
     let titres = |niveau: usize| -> Vec<&BlocMd> {
         blocs.iter().filter(|b| matches!(b.genre, Genre::Titre(n) if n == niveau)).collect()
     };
-    let n1 = titres(1);
+    // Le titre du livre placé en tête est un titre de service : hors des décomptes
+    // de niveau 1 et de `n1_page_min`.
+    let titre_norm = normaliser(&titre_livre);
+    let mut n1 = titres(1);
+    if n1.first().is_some_and(|b| !titre_norm.is_empty() && normaliser(&b.texte) == titre_norm) {
+        n1.remove(0);
+    }
     let n1_prefixes = n1
         .iter()
         .filter(|b| a.prefixe_n1.as_ref().is_none_or(|p| b.texte.starts_with(p.as_str())))

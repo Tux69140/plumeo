@@ -50,6 +50,13 @@ Propres à un livre (un champ absent ou `null` n'est pas vérifié) :
 | `moities` | ancres en `g` et en `d` (double page) |
 | `duree_max_s` | durée maximale de conversion (en `--release`) |
 
+Le test convertit chaque livre avec le titre que proposerait la CLI (métadonnées du PDF,
+nom du fichier). Ce titre, placé en tête du Markdown, est un titre de service : le premier
+titre de niveau 1, s'il porte ce titre (texte normalisé), est hors de `titres_n1`, `n1_min`,
+`n1_max` et `n1_page_min`. Aucun attendu ne change ; seul l'affichage de Connaissance passe
+de n1 1 à n1 0 (son titre « CONNAISSANCE LOGIQUE PENSÉE PRATIQUE », déjà détecté, est le
+titre du livre).
+
 `derogations` (`raison`, `mediane_paragraphes_min`, `nombres_isoles_pages`) assouplit
 une attente **commune** que le livre ne peut pas tenir, pour une raison mesurée et
 consignée ci-dessous ; la raison est affichée à chaque passage du test.

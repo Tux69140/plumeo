@@ -37,7 +37,7 @@ fn livre_de_trois_pages() {
     let p3 = [en_tete(), corps(200.0, "Troisieme page avec du texte.")];
     let pdf = fabriquer_pdf(&[&p1, &p2, &p3]);
     let doc = DocumentPdf::ouvrir(&pdf).unwrap();
-    let c = convertir_livre(&doc, &reglages(), None, &mut |_, _| {}).unwrap();
+    let c = convertir_livre(&doc, &reglages(), "", None, &mut |_, _| {}).unwrap();
     assert!(c.markdown.contains("# CHAPITRE UN"), "{}", c.markdown);
     assert!(!c.markdown.contains("Mon livre"));
     let en_tetes = c.retraits.iter().filter(|r| r.role == Role::EnTete).count();
@@ -55,7 +55,7 @@ fn page_vide_au_milieu() {
     let p3 = [corps(200.0, "Texte de la troisieme page.")];
     let pdf = fabriquer_pdf(&[&p1, &[], &p3]);
     let doc = DocumentPdf::ouvrir(&pdf).unwrap();
-    let c = convertir_livre(&doc, &reglages(), None, &mut |_, _| {}).unwrap();
+    let c = convertir_livre(&doc, &reglages(), "", None, &mut |_, _| {}).unwrap();
     let vides: Vec<_> = c.points.iter().filter(|p| p.genre == GenrePoint::PageSansTexte).collect();
     assert_eq!(vides.len(), 1);
     assert_eq!(vides[0].ancre.page, 2);
@@ -69,7 +69,7 @@ fn progression_appelee() {
     let pdf = fabriquer_pdf(&[&p, &p, &p]);
     let doc = DocumentPdf::ouvrir(&pdf).unwrap();
     let mut appels = Vec::new();
-    convertir_livre(&doc, &reglages(), None, &mut |a, b| appels.push((a, b))).unwrap();
+    convertir_livre(&doc, &reglages(), "", None, &mut |a, b| appels.push((a, b))).unwrap();
     assert_eq!(appels, [(1, 3), (2, 3), (3, 3)]);
 }
 
@@ -112,7 +112,7 @@ fn numero_de_page_residuel() {
     let p1 = [corps(200.0, "Du texte de page."), corps(780.0, "42")];
     let pdf = fabriquer_pdf(&[&p1]);
     let doc = DocumentPdf::ouvrir(&pdf).unwrap();
-    let c = convertir_livre(&doc, &reglages(), None, &mut |_, _| {}).unwrap();
+    let c = convertir_livre(&doc, &reglages(), "", None, &mut |_, _| {}).unwrap();
     assert!(c.retraits.iter().any(|r| r.role == Role::NumeroPage && r.texte == "42"));
     assert!(c.points.iter().any(|p| p.genre == GenrePoint::NumeroPageResiduel && p.ancre.page == 1));
     assert!(!c.markdown.contains("42"));
@@ -125,9 +125,9 @@ fn forcer_titres_remplace_les_reglages() {
     let doc = DocumentPdf::ouvrir(&pdf).unwrap();
     let mut r = reglages();
     r.titres = SourceTitres::GrasMajuscules;
-    let sans = convertir_livre(&doc, &r, None, &mut |_, _| {}).unwrap();
+    let sans = convertir_livre(&doc, &r, "", None, &mut |_, _| {}).unwrap();
     assert!(!sans.markdown.contains("# Un grand titre"), "{}", sans.markdown);
-    let avec = convertir_livre(&doc, &r, Some(SourceTitres::Taille), &mut |_, _| {}).unwrap();
+    let avec = convertir_livre(&doc, &r, "", Some(SourceTitres::Taille), &mut |_, _| {}).unwrap();
     assert_eq!(avec.source_titres, SourceTitres::Taille);
     assert!(avec.markdown.contains("# Un grand titre"), "{}", avec.markdown);
 }
@@ -142,7 +142,7 @@ fn double_page_coupee_en_deux() {
     let doc = DocumentPdf::ouvrir(&pdf).unwrap();
     let mut r = reglages();
     r.double_page = Some(0.5);
-    let c = convertir_livre(&doc, &r, None, &mut |_, _| {}).unwrap();
+    let c = convertir_livre(&doc, &r, "", None, &mut |_, _| {}).unwrap();
     let g = c.markdown.find("@p1g ").expect(&c.markdown);
     let d = c.markdown.find("@p1d ").expect(&c.markdown);
     assert!(g < d);
@@ -154,7 +154,7 @@ fn note_de_bas_de_page() {
     let p1 = [corps(200.0, "Un appel*"), corps(780.0, "* La note.")];
     let pdf = fabriquer_pdf(&[&p1]);
     let doc = DocumentPdf::ouvrir(&pdf).unwrap();
-    let c = convertir_livre(&doc, &avec_notes(), None, &mut |_, _| {}).unwrap();
+    let c = convertir_livre(&doc, &avec_notes(), "", None, &mut |_, _| {}).unwrap();
     assert_eq!(c.nb_notes, 1);
     assert!(c.markdown.contains("appel[^1-*]"), "{}", c.markdown);
     assert!(c.markdown.contains("[^1-*]: La note."), "{}", c.markdown);
@@ -166,7 +166,7 @@ fn notes_regroupees_en_fin_de_chapitre() {
     let p2 = [corps(200.0, "NOTES"), corps(500.0, "* La note groupee.")];
     let pdf = fabriquer_pdf(&[&p1, &p2]);
     let doc = DocumentPdf::ouvrir(&pdf).unwrap();
-    let c = convertir_livre(&doc, &reglages(), None, &mut |_, _| {}).unwrap();
+    let c = convertir_livre(&doc, &reglages(), "", None, &mut |_, _| {}).unwrap();
     assert!(c.retraits.iter().any(|r| r.role == Role::TitreNotes), "{:?}", c.retraits);
     assert_eq!(c.nb_notes, 1, "{}", c.markdown);
     assert!(c.markdown.contains("[^1-*]: La note groupee."), "{}", c.markdown);
@@ -180,7 +180,7 @@ fn notes_de_fin_de_livre_liees_depuis_les_chapitres_precedents() {
     let p3 = [corps(200.0, "NOTES"), corps(300.0, "* La premiere note."), corps(400.0, "** La seconde note.")];
     let pdf = fabriquer_pdf(&[&p1, &p2, &p3]);
     let doc = DocumentPdf::ouvrir(&pdf).unwrap();
-    let c = convertir_livre(&doc, &reglages(), None, &mut |_, _| {}).unwrap();
+    let c = convertir_livre(&doc, &reglages(), "", None, &mut |_, _| {}).unwrap();
     assert_eq!(c.nb_notes, 2, "{}", c.markdown);
 
     let dir = tempfile::tempdir().unwrap();
@@ -224,11 +224,47 @@ fn saut_de_section_apres_une_page_courte() {
     let p3 = page_pleine(100.0, 40, "Le lecteur comprendra", "fin du livre.");
     let pdf = fabriquer_pdf(&[&p1, &p2, &p3]);
     let doc = DocumentPdf::ouvrir(&pdf).unwrap();
-    let c = convertir_livre(&doc, &reglages(), None, &mut |_, _| {}).unwrap();
+    let c = convertir_livre(&doc, &reglages(), "", None, &mut |_, _| {}).unwrap();
     let md = &c.markdown;
     assert_eq!(md.matches("* * *").count(), 1, "{md}");
     let pos = |m: &str| md.find(m).unwrap_or_else(|| panic!("{m} absent : {md}"));
     assert!(pos("ISBN 2-85566-476-4\n") < pos("* * *"), "{md}");
     assert!(pos("* * *") < pos("Le lecteur comprendra"), "{md}");
     assert!(md.contains("-->\n* * *\n"), "le saut a son ancre : {md}");
+}
+
+/// Lignes du Markdown sans les ancres ni les lignes vides.
+fn lignes_de_texte(md: &str) -> Vec<&str> {
+    md.lines().filter(|l| !l.is_empty() && !l.starts_with("<!-- ")).collect()
+}
+
+#[test]
+fn titre_du_livre_en_tete_du_markdown() {
+    let p1 = [
+        corps(100.0, "Jean Dupont"),
+        t(300.0, "Mon petit", 12.0, StyleFixture::Gras),
+        t(360.0, "livre", 12.0, StyleFixture::Gras),
+    ];
+    let p2 = [t(100.0, "CHAPITRE UN", 20.0, StyleFixture::Gras), corps(200.0, "Premier paragraphe du chapitre.")];
+    let pdf = fabriquer_pdf(&[&p1, &p2]);
+    let doc = DocumentPdf::ouvrir(&pdf).unwrap();
+    let c = convertir_livre(&doc, &reglages(), "Mon petit livre", None, &mut |_, _| {}).unwrap();
+    let md = &c.markdown;
+    assert!(md.starts_with("<!-- @p1 "), "{md}");
+    assert_eq!(
+        lignes_de_texte(md)[..3],
+        ["# Mon petit livre", "Jean Dupont", "# CHAPITRE UN"],
+        "{md}"
+    );
+}
+
+#[test]
+fn titre_du_livre_introuvable_insere_page_1() {
+    let p1 = [t(100.0, "CHAPITRE UN", 20.0, StyleFixture::Gras), corps(200.0, "Premier paragraphe du chapitre.")];
+    let pdf = fabriquer_pdf(&[&p1]);
+    let doc = DocumentPdf::ouvrir(&pdf).unwrap();
+    let c = convertir_livre(&doc, &reglages(), "Mon petit livre", None, &mut |_, _| {}).unwrap();
+    assert!(c.markdown.starts_with("<!-- @p1 0,0,1000,1000 -->\n# Mon petit livre\n"), "{}", c.markdown);
+    let sans = convertir_livre(&doc, &reglages(), "", None, &mut |_, _| {}).unwrap();
+    assert!(lignes_de_texte(&sans.markdown)[0] == "# CHAPITRE UN", "{}", sans.markdown);
 }
