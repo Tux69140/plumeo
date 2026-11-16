@@ -86,7 +86,7 @@ Conversion en `--release`, epubcheck 5.4.0 : **les 9 EPUB sont valides**, le tes
 
 | # | Attendu | Mesuré | Durée |
 |---|---|---|---|
-| 1 | signets, ~~73~~ **27** n1 dont « VISITE À PATMOS » (voir plus bas) | signets, 27 n1 (« 1 VISITE À PATMOS »…) ; médiane 419 car. | 0,3 s |
+| 1 | signets, ~~73~~ ~~27~~ **17** n1 + 5 n2 dont « VISITE À PATMOS » (voir plus bas) | signets, 17 n1 + 5 n2 (« 1 VISITE À PATMOS »…) ; médiane 419 car. | 0,3 s |
 | 2 | gras-majuscules, 10 n1 tous à partir de la p. 19, dont « LES 4 ÉLÉMENTS », « LA GENÈSE », « LUCIFER ET LE CHRIST » (attente réécrite, voir plus bas) | gras-majuscules, les 10 ouvertures du corps (pp. 19, 26, 31, 32, 33, 36, 38, 40, 53, 56) ; 29 n2 ; 48 titres courants retirés ; résumé pp. 6-11 en sommaire ; médiane **35** (dérogation) | 0,8 s |
 | 3 | pas de titre courant ; note `*` p. 36 ; 5 à 60 n1 | 0 titre courant ; 7 notes dont `*` p. 36 ; 18 n1 : les 11 chapitres, 2 titres de couverture, 5 fragments de schémas ou d'OCR | 1,7 s |
 | 4 | signets, 23 titres | signets, 23 n1, 0 n2 | 0,6 s |
@@ -112,6 +112,11 @@ notes de fin** (« [1] » … « [46] », pp. 134-136). Les 27 autres sont les 1
 en deux signets (« I » puis « La pierre cubique », etc.). Avec 73, l'EPUB avait 46
 chapitres d'une ligne. Le moteur ignore désormais les signets « [n] » ; l'attente
 passe de 73 à 27.
+
+**Puis 17 n1 et 5 n2** (retour du contrôle visuel) : les 5 sections de la fin sont des
+signets à plat (« I » puis « La pierre cubique »), que le moteur fusionne en « I. La
+pierre cubique » et descend d'un niveau (série romaine après des chapitres en chiffres
+arabes) : `titres_n1` passe de 27 à 17, `n2` de non vérifié à 5.
 
 ### Attente du n° 2 réécrite : les chapitres du corps
 

@@ -150,10 +150,100 @@ fn est_sommaire(bloc: &Bloc, pages: &BTreeSet<u32>) -> bool {
     matches!(bloc, Bloc::Paragraphe(_)) && pages.contains(&bloc.ancre().page)
 }
 
+/// Signet à chercher dans le corps. `texte_impose` : le titre garde le texte du signet
+/// (numéro et titre fusionnés) au lieu de celui des paragraphes retrouvés.
+struct SignetCherche {
+    signet: Signet,
+    texte_impose: bool,
+}
+
+impl From<Signet> for SignetCherche {
+    fn from(signet: Signet) -> Self {
+        SignetCherche { signet, texte_impose: false }
+    }
+}
+
+/// Type d'une numérotation de titre.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Numerotation {
+    Arabe,
+    Romaine,
+}
+
+static NUMERO_SEUL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:[IVXLCDM]+|\d+)\.?$").unwrap());
+static NUMEROTE_ARABE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+\.?(?:\s|$)").unwrap());
+static NUMEROTE_ROMAIN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[IVXLCDM]+\.?(?:\s|$)").unwrap());
+
+fn numerotation(titre: &str) -> Option<Numerotation> {
+    let titre = titre.trim();
+    if NUMEROTE_ARABE.is_match(titre) {
+        Some(Numerotation::Arabe)
+    } else if NUMEROTE_ROMAIN.is_match(titre) {
+        Some(Numerotation::Romaine)
+    } else {
+        None
+    }
+}
+
+/// Signets d'un plan à plat (Calibre) rendus utilisables comme plan :
+/// - deux signets consécutifs de même niveau et de même page, le premier n'étant qu'un
+///   numéro (« I », « 3. »), n'en font qu'un : « I. La pierre cubique » ;
+/// - une numérotation romaine qui repart à « I » après un signet numéroté en chiffres
+///   arabes, au même niveau, descend d'un niveau jusqu'au prochain signet arabe de ce
+///   niveau. Les signets non numérotés entre les deux gardent leur niveau.
+fn preparer_signets(signets: &[Signet]) -> Vec<SignetCherche> {
+    let mut fusionnes: Vec<SignetCherche> = Vec::with_capacity(signets.len());
+    let mut i = 0;
+    while i < signets.len() {
+        let s = &signets[i];
+        let suivant = signets.get(i + 1).filter(|n| {
+            NUMERO_SEUL.is_match(s.titre.trim())
+                && !NUMERO_SEUL.is_match(n.titre.trim())
+                && n.niveau == s.niveau
+                && n.page == s.page
+        });
+        if let Some(n) = suivant {
+            let titre = format!("{}. {}", s.titre.trim().trim_end_matches('.'), n.titre.trim());
+            fusionnes.push(SignetCherche { signet: Signet { titre, ..s.clone() }, texte_impose: true });
+            i += 2;
+        } else {
+            fusionnes.push(s.clone().into());
+            i += 1;
+        }
+    }
+
+    // Niveau (avant descente) du dernier signet arabe, et niveau de la série romaine en cours.
+    let mut dernier_arabe: Option<u8> = None;
+    let mut serie: Option<u8> = None;
+    for sc in &mut fusionnes {
+        let niveau = sc.signet.niveau;
+        match numerotation(&sc.signet.titre) {
+            Some(Numerotation::Arabe) => {
+                dernier_arabe = Some(niveau);
+                if serie == Some(niveau) {
+                    serie = None;
+                }
+            }
+            Some(Numerotation::Romaine) => {
+                let numero = sc.signet.titre.split_whitespace().next().unwrap_or("").trim_end_matches('.');
+                let repart_a_un = numero == "I";
+                if serie.is_none() && repart_a_un && dernier_arabe == Some(niveau) {
+                    serie = Some(niveau);
+                }
+                if serie == Some(niveau) {
+                    sc.signet.niveau = niveau + 1;
+                }
+            }
+            None => {}
+        }
+    }
+    fusionnes
+}
+
 /// Titres issus des signets. Retourne les blocs et les points de signets introuvables.
 fn titres_depuis_signets(
     blocs: Vec<Bloc>,
-    signets: &[Signet],
+    signets: &[SignetCherche],
     pages_som: &BTreeSet<u32>,
 ) -> (Vec<Bloc>, Vec<PointAVerifier>) {
     let mut points = Vec::new();
@@ -164,7 +254,7 @@ fn titres_depuis_signets(
     let mut insertions: BTreeMap<usize, Vec<Bloc>> = BTreeMap::new();
     let index = IndexTitres::new(&blocs);
 
-    for signet in signets {
+    for SignetCherche { signet, texte_impose } in signets {
         let niveau = signet.niveau.clamp(1, 3);
         let cible = normaliser_titre(&signet.titre);
         let trouve = if cible.is_empty() {
@@ -179,6 +269,7 @@ fn titres_depuis_signets(
             Some((debut, fin, texte)) => {
                 utilises.extend(debut..fin);
                 let ancre = blocs[debut].ancre();
+                let texte = if *texte_impose { signet.titre.trim().to_string() } else { texte };
                 remplacements.insert(debut, (fin - debut, Bloc::Titre { niveau, texte, ancre }));
             }
             None => {
@@ -739,7 +830,7 @@ pub fn detecter_titres(
     let mut retraits = Vec::new();
     let blocs = match effective {
         SourceTitres::Signets => {
-            let (blocs, manquants) = titres_depuis_signets(blocs, signets, &pages_som);
+            let (blocs, manquants) = titres_depuis_signets(blocs, &preparer_signets(signets), &pages_som);
             points.extend(manquants);
             blocs
         }
@@ -753,7 +844,8 @@ pub fn detecter_titres(
             points.extend(pts);
             let niveau_1_pris = !pseudo_signets.is_empty();
             let blocs = if niveau_1_pris {
-                let (blocs, manquants) = titres_depuis_signets(blocs, &pseudo_signets, &pages_som);
+                let pseudo: Vec<SignetCherche> = pseudo_signets.iter().cloned().map(Into::into).collect();
+                let (blocs, manquants) = titres_depuis_signets(blocs, &pseudo, &pages_som);
                 points.extend(manquants);
                 blocs
             } else {
@@ -936,6 +1028,137 @@ mod tests {
         assert!(matches!(&blocs[0], Bloc::Paragraphe(_)));
         assert!(matches!(&blocs[1], Bloc::Titre { texte, .. } if texte == "Introduction"));
         assert!(points.is_empty());
+    }
+
+    /// Plan à plat de Calibre : chapitres numérotés en arabe, puis sections « I », titre.
+    fn plan_a_plat() -> Vec<Signet> {
+        vec![
+            signet("1. VISITE À PATMOS", 1, 3),
+            signet("2. INTRODUCTION", 1, 5),
+            signet("3. LA CITÉ CÉLESTE", 1, 7),
+            signet("I", 1, 9),
+            signet("La pierre cubique", 1, 9),
+            signet("II", 1, 11),
+            signet("Les assises", 1, 11),
+        ]
+    }
+
+    #[test]
+    fn signets_numero_et_titre_fusionnes() {
+        let blocs = vec![
+            para(9, "I", 19.4, true, 1),
+            para(9, "La pierre cubique", 19.4, true, 1),
+            corps(9, &texte_long()),
+        ];
+        let signets = [signet("1. A", 1, 3), signet("2. B", 1, 5), signet("I", 1, 9), signet("La pierre cubique", 1, 9)];
+        let (blocs, points, _, _) = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
+        let t = titres(&blocs);
+        assert!(t.iter().any(|(_, x)| x == "I. La pierre cubique"), "{t:?}");
+        assert!(t.iter().all(|(_, x)| x != "I" && x != "La pierre cubique"), "{t:?}");
+        // Les deux paragraphes sont consommés : il reste le titre et le corps de la page 9.
+        assert_eq!(blocs.iter().filter(|b| b.ancre().page == 9).count(), 2);
+        assert!(points.iter().all(|p| p.ancre.page != 9), "{points:?}");
+    }
+
+    #[test]
+    fn signets_numero_et_titre_dans_un_seul_paragraphe() {
+        let blocs = vec![para(9, "I La pierre cubique", 19.4, true, 1), corps(9, &texte_long())];
+        let signets = [signet("1. A", 1, 3), signet("2. B", 1, 5), signet("I", 1, 9), signet("La pierre cubique", 1, 9)];
+        let (blocs, points, _, _) = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
+        assert!(titres(&blocs).iter().any(|(_, x)| x == "I. La pierre cubique"));
+        assert_eq!(blocs.iter().filter(|b| b.ancre().page == 9).count(), 2);
+        assert!(points.iter().all(|p| p.ancre.page != 9), "{points:?}");
+    }
+
+    #[test]
+    fn signets_romains_apres_arabes_descendent_d_un_niveau() {
+        let blocs: Vec<Bloc> = plan_a_plat().iter().map(|s| para(s.page, &s.titre, 19.4, true, 1)).collect();
+        let (blocs, points, _, _) = detecter_titres(blocs, &plan_a_plat(), 100, SourceTitres::Signets);
+        assert_eq!(
+            titres(&blocs),
+            vec![
+                (1, "1. VISITE À PATMOS".to_string()),
+                (1, "2. INTRODUCTION".to_string()),
+                (1, "3. LA CITÉ CÉLESTE".to_string()),
+                (2, "I. La pierre cubique".to_string()),
+                (2, "II. Les assises".to_string()),
+            ]
+        );
+        assert!(points.is_empty(), "{points:?}");
+    }
+
+    #[test]
+    fn serie_romaine_finie_par_le_prochain_signet_arabe() {
+        let signets = vec![
+            signet("1. A", 1, 3),
+            signet("I", 1, 5),
+            signet("Un", 1, 5),
+            signet("Épilogue", 1, 6),
+            signet("II", 1, 7),
+            signet("Deux", 1, 7),
+            signet("2. B", 1, 9),
+            signet("I", 1, 11),
+            signet("Trois", 1, 11),
+        ];
+        let blocs = vec![corps(1, &texte_long())];
+        let (blocs, _, _, _) = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
+        let niveaux: Vec<(u8, String)> = titres(&blocs);
+        let attendu = [
+            (1, "1. A"),
+            (2, "I. Un"),
+            (1, "Épilogue"), // non numéroté : garde son niveau
+            (2, "II. Deux"),
+            (1, "2. B"),
+            (2, "I. Trois"),
+        ];
+        assert_eq!(niveaux.len(), attendu.len(), "{niveaux:?}");
+        for (obtenu, attendu) in niveaux.iter().zip(attendu) {
+            assert_eq!((obtenu.0, obtenu.1.as_str()), attendu);
+        }
+    }
+
+    #[test]
+    fn signets_romains_sans_arabe_avant_gardent_leur_niveau() {
+        let signets = [signet("I", 1, 3), signet("Un", 1, 3), signet("II", 1, 5), signet("Deux", 1, 5), signet("III", 1, 7)];
+        let (blocs, _, _, _) = detecter_titres(vec![corps(1, &texte_long())], &signets, 100, SourceTitres::Signets);
+        assert!(titres(&blocs).iter().all(|(n, _)| *n == 1), "{:?}", titres(&blocs));
+    }
+
+    #[test]
+    fn serie_romaine_qui_ne_repart_pas_a_un_ne_descend_pas() {
+        let signets = [signet("1. A", 1, 3), signet("II", 1, 5), signet("Deux", 1, 5), signet("2. B", 1, 7)];
+        let (blocs, _, _, _) = detecter_titres(vec![corps(1, &texte_long())], &signets, 100, SourceTitres::Signets);
+        assert_eq!(titres(&blocs)[1], (1, "II. Deux".to_string()));
+    }
+
+    #[test]
+    fn plan_deja_imbrique_inchange() {
+        let signets = [
+            signet("1. A", 1, 3),
+            signet("I", 2, 3),
+            signet("2. B", 1, 5),
+            signet("II", 2, 5),
+            signet("3. C", 1, 7),
+        ];
+        let (blocs, _, _, _) = detecter_titres(vec![corps(1, &texte_long())], &signets, 100, SourceTitres::Signets);
+        let niveaux: Vec<u8> = titres(&blocs).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(niveaux, [1, 2, 1, 2, 1]);
+    }
+
+    #[test]
+    fn deux_numeros_consecutifs_ne_sont_pas_fusionnes() {
+        let signets = [signet("1. A", 1, 3), signet("2. B", 1, 5), signet("I", 1, 7), signet("II", 1, 7)];
+        let (blocs, _, _, _) = detecter_titres(vec![corps(1, &texte_long())], &signets, 100, SourceTitres::Signets);
+        let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
+        assert_eq!(t, ["1. A", "2. B", "I", "II"]);
+    }
+
+    #[test]
+    fn signets_fusionnes_introuvables_gardent_le_titre_fusionne() {
+        let signets = [signet("1. A", 1, 3), signet("2. B", 1, 5), signet("I", 1, 7), signet("Un", 1, 7)];
+        let (blocs, points, _, _) = detecter_titres(vec![corps(7, &texte_long())], &signets, 100, SourceTitres::Signets);
+        assert!(titres(&blocs).contains(&(2, "I. Un".to_string())), "{:?}", titres(&blocs));
+        assert!(points.iter().any(|p| p.message.contains("I. Un")));
     }
 
     #[test]

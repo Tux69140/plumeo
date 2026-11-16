@@ -1,8 +1,8 @@
 [
   { "fichier": "omraam/pdf/Aïvanhov, Omraam Mikhaël - Approche de la Cité céleste.pdf",
     "serie": "calibre-lettre", "titres": "auto",
-    "attentes": { "source_titres": "signets", "titres_n1": 27, "titres_contiennent": ["VISITE À PATMOS"],
-                  "prefixe_n1": null, "n1_min": null, "n2": null, "notes_pages": [], "sans_notes_pages": [],
+    "attentes": { "source_titres": "signets", "titres_n1": 17, "titres_contiennent": ["VISITE À PATMOS"],
+                  "prefixe_n1": null, "n1_min": null, "n2": 5, "notes_pages": [], "sans_notes_pages": [],
                   "absent_regex": [], "moities": false } },
   { "fichier": "omraam/pdf/Anges et l'arbre de vie - Omraam Mikhaël Aïvanhov.pdf",
     "serie": "calibre-lettre", "titres": "auto",
