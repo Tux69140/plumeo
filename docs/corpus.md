@@ -32,7 +32,10 @@ Communes à chaque livre :
 - le Markdown commence par un titre `#` égal au titre du livre (premier bloc, texte
   normalisé) ;
 - au moins 1 retrait si la série a des zones non nulles ;
-- epubcheck sans erreur (si `EPUBCHECK_JAR`).
+- epubcheck sans erreur (si `EPUBCHECK_JAR`) ; l'EPUB validé a alors autant de liens
+  d'entrée de sommaire (`href="chap-…#t-…"` dans les chapitres, hors `nav.xhtml`) que le
+  Markdown a d'entrées : une entrée dont le titre visé manque y deviendrait du texte sans
+  avertissement.
 
 Propres à un livre (un champ absent ou `null` n'est pas vérifié) :
 
@@ -71,7 +74,9 @@ paragraphes : elles sont hors des statistiques de paragraphes. Le titre « Table
 ou « Sommaire » de niveau 1 suivi d'une entrée est lui aussi un titre de service, hors des
 mêmes décomptes. Chronique de l'Akasha passe ainsi de `titres_n1` 23 à 22 : son « SOMMAIRE »
 (signet) mène désormais à 12 entrées cliquables. Approche de la Cité céleste attend 22 entrées
-(17 chapitres et les 5 parties du chapitre 17).
+(17 chapitres et les 5 parties du chapitre 17). `entrees_sommaire` est fixé aussi pour
+Chronique de l'Akasha (12), Le sens de l'amour (5) et Anges et l'arbre de vie (4, sommaire
+d'origine p. 11), valeurs mesurées ; les autres livres n'ont pas d'entrée cliquable.
 
 `derogations` (`raison`, `mediane_paragraphes_min`, `nombres_isoles_pages`) assouplit
 une attente **commune** que le livre ne peut pas tenir, pour une raison mesurée et

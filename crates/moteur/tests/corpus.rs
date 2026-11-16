@@ -244,24 +244,51 @@ fn verifier_titre_livre(blocs: &[BlocMd], titre_livre: &str) -> Result<(), Strin
     }
 }
 
-fn epubcheck(jar: &str, markdown: &str, nom: &str) -> Result<(), String> {
-    let dossier = tempfile::tempdir().map_err(|e| e.to_string())?;
-    let chemin = dossier.path().join("livre.epub");
-    let meta = Metadonnees {
+fn meta_corpus(nom: &str) -> Metadonnees {
+    Metadonnees {
         titre: nom.to_string(),
         auteur: "Corpus".into(),
         langue: "fr".into(),
         identifiant: "urn:uuid:00000000-0000-5000-8000-000000000000".into(),
         modifie: "2026-11-10T00:00:00Z".into(),
-    };
-    generer_epub(markdown, &meta, None, &chemin).map_err(|e| format!("generer_epub : {e}"))?;
+    }
+}
+
+/// Nombre de liens d'entrée de sommaire (`href="chap-…#t-…"`) dans les chapitres de
+/// l'EPUB ; la navigation (`nav.xhtml`) n'est pas comptée. Une entrée dont le titre
+/// visé manque est rendue en texte, sans lien : elle n'est pas comptée.
+fn liens_de_sommaire(epub: &Path) -> Result<usize, String> {
+    use std::io::Read;
+    let lien = Regex::new(r#"href="chap-\d+\.xhtml#t-"#).unwrap();
+    let fichier = std::fs::File::open(epub).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(fichier).map_err(|e| e.to_string())?;
+    let mut total = 0;
+    for i in 0..zip.len() {
+        let mut membre = zip.by_index(i).map_err(|e| e.to_string())?;
+        let nom = membre.name().map_err(|e| e.to_string())?.to_string();
+        if !(nom.starts_with("OEBPS/chap-") && nom.ends_with(".xhtml")) {
+            continue;
+        }
+        let mut texte = String::new();
+        membre.read_to_string(&mut texte).map_err(|e| format!("{nom} : {e}"))?;
+        total += lien.find_iter(&texte).count();
+    }
+    Ok(total)
+}
+
+/// Génère l'EPUB et le valide avec epubcheck ; renvoie son nombre de liens d'entrée
+/// de sommaire (`liens_de_sommaire`).
+fn epubcheck(jar: &str, markdown: &str, nom: &str) -> Result<usize, String> {
+    let dossier = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let chemin = dossier.path().join("livre.epub");
+    generer_epub(markdown, &meta_corpus(nom), None, &chemin).map_err(|e| format!("generer_epub : {e}"))?;
     let sortie = std::process::Command::new("java")
         .args(["-jar", jar])
         .arg(&chemin)
         .output()
         .map_err(|e| format!("java : {e}"))?;
     if sortie.status.success() {
-        return Ok(());
+        return liens_de_sommaire(&chemin);
     }
     let texte = String::from_utf8_lossy(&sortie.stdout).to_string() + &String::from_utf8_lossy(&sortie.stderr);
     let erreurs: Vec<&str> = texte.lines().filter(|l| l.starts_with("ERROR") || l.starts_with("FATAL")).take(5).collect();
@@ -332,11 +359,17 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
     if zones_non_nulles(&reglages) && conversion.retraits.is_empty() {
         echecs.push("aucun retrait malgré des zones non nulles".into());
     }
-    if let Ok(jar) = std::env::var("EPUBCHECK_JAR")
-        && let Err(e) = epubcheck(&jar, &conversion.markdown, &entree.fichier)
-    {
-        echecs.push(e);
-    }
+    // Liens d'entrée de sommaire de l'EPUB validé, comparés plus bas aux entrées du Markdown.
+    let liens_epub = match std::env::var("EPUBCHECK_JAR") {
+        Ok(jar) => match epubcheck(&jar, &conversion.markdown, &entree.fichier) {
+            Ok(n) => Some(n),
+            Err(e) => {
+                echecs.push(e);
+                None
+            }
+        },
+        Err(_) => None,
+    };
 
     // Attentes propres au livre.
     let titres = |niveau: usize| -> Vec<&BlocMd> {
@@ -406,6 +439,12 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
         && entrees != n
     {
         echecs.push(format!("{entrees} entrées de sommaire au lieu de {n}"));
+    }
+    // Une entrée dont le titre visé manque dans l'EPUB y devient du texte, sans avertissement.
+    if let Some(liens) = liens_epub
+        && liens != entrees
+    {
+        echecs.push(format!("{liens} liens de sommaire dans l'EPUB pour {entrees} entrées du Markdown"));
     }
     for t in &a.titres_contiennent {
         if !blocs.iter().any(|b| matches!(b.genre, Genre::Titre(_)) && b.texte.contains(t.as_str())) {
@@ -503,6 +542,18 @@ mod tests {
         let md = format!("{ANCRE}\nUn paragraphe.\n\n{ANCRE}\n# Approche de la Cité céleste\n");
         assert!(verifier_titre_livre(&lire_blocs(&md), "Approche de la Cité céleste").is_err());
         assert!(verifier_titre_livre(&[], "Approche de la Cité céleste").is_err());
+    }
+
+    #[test]
+    fn liens_de_sommaire_comptes_dans_l_epub() {
+        // Une entrée sans titre cible est rendue en texte : elle ne compte pas.
+        let md = format!(
+            "{ANCRE}\n# Table\n\n{ANCRE}\n[Deux](#t-deux)\n\n{ANCRE}\n[Absent](#t-absent)\n\n{ANCRE}\n# Deux\n\n{ANCRE}\nTexte.\n"
+        );
+        let dossier = tempfile::tempdir().unwrap();
+        let chemin = dossier.path().join("livre.epub");
+        generer_epub(&md, &meta_corpus("Livre"), None, &chemin).unwrap();
+        assert_eq!(liens_de_sommaire(&chemin), Ok(1));
     }
 
     #[test]
