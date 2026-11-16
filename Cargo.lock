@@ -606,6 +606,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "unicode-normalization",
+ "zip",
 ]
 
 [[package]]

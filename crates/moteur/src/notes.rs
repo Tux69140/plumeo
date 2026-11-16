@@ -330,6 +330,16 @@ fn notes_enchainees(marqueur: String, segments: Vec<Segment>) -> Vec<(String, Ve
     sortie
 }
 
+/// Un titre termine la section de notes, sauf un intertitre (niveau 2 ou plus,
+/// « Chapitre 1 ») directement suivi d'un paragraphe qui commence par un marqueur
+/// de note : les notes de fin de livre sont souvent groupées par chapitre.
+fn termine_la_section(blocs: &[Bloc], j: usize) -> bool {
+    let Bloc::Titre { niveau, .. } = &blocs[j] else { return false };
+    let suivi_d_une_note =
+        matches!(blocs.get(j + 1), Some(Bloc::Paragraphe(p)) if extraire_marqueur(&p.segments).is_some());
+    *niveau == 1 || est_debut_de_section(&blocs[j]) || !suivi_d_une_note
+}
+
 enum Element {
     Bloc(Bloc),
     Note(usize),
@@ -354,9 +364,7 @@ pub fn notes_regroupees(
             i += 1;
             continue;
         }
-        let fin = (i + 1..blocs.len())
-            .find(|&j| matches!(blocs[j], Bloc::Titre { .. }))
-            .unwrap_or(blocs.len());
+        let fin = (i + 1..blocs.len()).find(|&j| termine_la_section(&blocs, j)).unwrap_or(blocs.len());
         let (ancre, texte) = match &blocs[i] {
             Bloc::Titre { texte, ancre, .. } => (*ancre, texte.clone()),
             Bloc::Paragraphe(p) => (p.ancre, p.texte_brut()),
@@ -707,6 +715,40 @@ mod tests {
         let Bloc::Paragraphe(p) = &blocs[4] else { panic!() };
         assert!(matches!(&p.segments[1], Segment::AppelNote { etiquette, .. } if etiquette == "2-1"));
         assert_eq!(texte_note(&blocs[2]), "Note du chapitre 1");
+    }
+
+    #[test]
+    fn notes_de_fin_de_livre_coupees_par_des_intertitres() {
+        let mut et = Etiqueteuse::new();
+        let blocs = vec![
+            titre("Chapitre 1", 1, 1),
+            bloc_para(vec![texte("Mot"), Segment::Exposant("1".into())], 1, 0.2),
+            titre("Chapitre 2", 1, 2),
+            bloc_para(vec![texte("Autre"), Segment::Exposant("1".into())], 2, 0.2),
+            titre("Notes", 1, 3),
+            titre("Chapitre 1", 2, 3),
+            bloc_para(vec![texte("1 Note du premier")], 3, 0.2),
+            titre("Chapitre 2", 2, 3),
+            bloc_para(vec![texte("1 Note du second")], 3, 0.4),
+            titre("Suite", 2, 4),
+            bloc_para(vec![texte("Texte ordinaire.")], 4, 0.2),
+        ];
+        let (blocs, retraits, points) = notes_regroupees(blocs, &mut et, &Vocabulaire::default());
+        assert!(points.is_empty(), "{points:?}");
+        assert_eq!(retraits.len(), 1);
+        let notes: Vec<(&str, String)> = blocs
+            .iter()
+            .filter_map(|b| match b {
+                Bloc::Note { etiquette, .. } => Some((etiquette.as_str(), texte_note(b))),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(notes, vec![("1-1", "Note du premier".into()), ("2-1", "Note du second".into())]);
+        // Les intertitres de la section restent des titres ; la section s'arrête au
+        // titre qui n'est pas suivi d'une note.
+        let titres = blocs.iter().filter(|b| matches!(b, Bloc::Titre { niveau: 2, .. })).count();
+        assert_eq!(titres, 3);
+        assert!(matches!(blocs.last(), Some(Bloc::Paragraphe(p)) if p.texte_brut() == "Texte ordinaire."));
     }
 
     #[test]

@@ -171,3 +171,37 @@ fn notes_regroupees_en_fin_de_chapitre() {
     assert_eq!(c.nb_notes, 1, "{}", c.markdown);
     assert!(c.markdown.contains("[^1-*]: La note groupee."), "{}", c.markdown);
 }
+
+#[test]
+fn notes_de_fin_de_livre_liees_depuis_les_chapitres_precedents() {
+    use std::io::Read;
+    let p1 = [t(100.0, "CHAPITRE UN", 20.0, StyleFixture::Gras), corps(200.0, "Un appel*")];
+    let p2 = [t(100.0, "CHAPITRE DEUX", 20.0, StyleFixture::Gras), corps(200.0, "Un autre appel**")];
+    let p3 = [corps(200.0, "NOTES"), corps(300.0, "* La premiere note."), corps(400.0, "** La seconde note.")];
+    let pdf = fabriquer_pdf(&[&p1, &p2, &p3]);
+    let doc = DocumentPdf::ouvrir(&pdf).unwrap();
+    let c = convertir_livre(&doc, &reglages(), None, &mut |_, _| {}).unwrap();
+    assert_eq!(c.nb_notes, 2, "{}", c.markdown);
+
+    let dir = tempfile::tempdir().unwrap();
+    let chemin = dir.path().join("livre.epub");
+    let meta = plumeo_epub::Metadonnees {
+        titre: "Livre".into(),
+        auteur: String::new(),
+        langue: "fr".into(),
+        identifiant: "urn:uuid:12345678-1234-1234-1234-123456789abc".into(),
+        modifie: "2026-11-10T12:00:00Z".into(),
+    };
+    plumeo_epub::generer_epub(&c.markdown, &meta, None, &chemin).unwrap();
+    let mut z = zip::ZipArchive::new(std::fs::File::open(&chemin).unwrap()).unwrap();
+    let mut lire = |nom: &str| {
+        let mut s = String::new();
+        z.by_name(nom).unwrap().read_to_string(&mut s).unwrap();
+        s
+    };
+    let un = lire("OEBPS/chap-001.xhtml");
+    let deux = lire("OEBPS/chap-002.xhtml");
+    assert!(un.contains(r#"href="chap-002.xhtml#note-1""#), "{un}\n{}", c.markdown);
+    assert!(deux.contains(r#"<a href="chap-001.xhtml#appel-1">↩</a>"#), "{deux}");
+    assert!(deux.contains(r##"href="#note-2""##), "{deux}");
+}

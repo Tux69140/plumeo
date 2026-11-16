@@ -101,6 +101,9 @@ Texte avec *italique*, **gras**, un exposant 1<sup>er</sup> et un appel[^7-12].
   le marqueur d'origine (`12`, `*`), qui est celui qu'on affiche.
 - Les définitions se placent à la fin du chapitre, juste avant le titre de niveau 1
   suivant ou à la fin du fichier.
+- Une étiquette vaut pour tout le livre : un appel peut renvoyer à une définition
+  placée dans un autre chapitre (notes regroupées en fin de livre). L'EPUB lie alors
+  les deux fichiers (`chap-002.xhtml#note-7`, retour vers le fichier de l'appel).
 
 **Titres :** `#`, `##` ou `###`. Le niveau 1 découpe les chapitres de l'EPUB.
 

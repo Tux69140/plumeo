@@ -25,11 +25,19 @@ impl Brouillon {
         Brouillon { titre, sous_titres: Vec::new(), evenements: Vec::new(), notes: Vec::new(), significatif: false }
     }
 
-    fn finir(self, titre_livre: &str) -> Chapitre {
+    /// Fusionne les appels orphelins (corps et notes) avant recensement et rendu.
+    fn preparer(&mut self) {
+        self.evenements = xhtml::fusionner_appels_orphelins(std::mem::take(&mut self.evenements));
+        for (_, contenu) in &mut self.notes {
+            *contenu = xhtml::fusionner_appels_orphelins(std::mem::take(contenu));
+        }
+    }
+
+    fn finir(self, indice: usize, titre_livre: &str, renvois: &mut xhtml::Renvois) -> Chapitre {
         Chapitre {
             titre: if self.titre.trim().is_empty() { titre_livre.to_string() } else { self.titre },
             sous_titres: self.sous_titres,
-            corps: xhtml::rendre_corps(self.evenements, self.notes),
+            corps: xhtml::rendre_corps(indice, self.evenements, self.notes, renvois),
         }
     }
 }
@@ -40,7 +48,7 @@ fn est_ancre(e: &Event) -> bool {
 
 pub fn decouper(markdown: &str, titre_livre: &str) -> Vec<Chapitre> {
     let parser = Parser::new_ext(markdown, Options::ENABLE_FOOTNOTES);
-    let mut chapitres: Vec<Chapitre> = Vec::new();
+    let mut chapitres: Vec<Brouillon> = Vec::new();
     let mut courant = Brouillon::nouveau(titre_livre.to_string());
     let mut dans_titre: Option<(HeadingLevel, String)> = None;
     let mut dans_note: Option<(String, Vec<Event<'static>>)> = None;
@@ -70,7 +78,7 @@ pub fn decouper(markdown: &str, titre_livre: &str) -> Vec<Chapitre> {
         match evt {
             Event::Start(Tag::Heading { level: HeadingLevel::H1, .. }) => {
                 if courant.significatif || !chapitres.is_empty() || !courant.notes.is_empty() {
-                    chapitres.push(courant.finir(titre_livre));
+                    chapitres.push(courant);
                 }
                 courant = Brouillon::nouveau(String::new());
                 courant.significatif = true;
@@ -124,7 +132,13 @@ pub fn decouper(markdown: &str, titre_livre: &str) -> Vec<Chapitre> {
         }
     }
     if courant.significatif || chapitres.is_empty() {
-        chapitres.push(courant.finir(titre_livre));
+        chapitres.push(courant);
     }
-    chapitres
+    // Les renvois de notes sont résolus sur tout le livre avant le rendu.
+    let mut renvois = xhtml::Renvois::default();
+    for (i, c) in chapitres.iter_mut().enumerate() {
+        c.preparer();
+        renvois.recenser(i, &c.evenements, &c.notes);
+    }
+    chapitres.into_iter().enumerate().map(|(i, c)| c.finir(i, titre_livre, &mut renvois)).collect()
 }

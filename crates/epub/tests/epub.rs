@@ -192,6 +192,35 @@ fn appel_repete_ids_uniques() {
 }
 
 #[test]
+fn notes_de_fin_de_livre_liees_entre_chapitres() {
+    let md = "# A\n\nAppel[^1-1] ici.\n\n# B\n\nSuite[^2-2].\n\n[^1-1]: La note.\n\n[^2-2]: Autre.\n";
+    let (_d, c) = fabriquer(md, None);
+    let e = entrees(&c);
+    let a = texte(&e, "OEBPS/chap-001.xhtml");
+    let b = texte(&e, "OEBPS/chap-002.xhtml");
+    assert!(
+        a.contains(r#"<a epub:type="noteref" id="appel-1" href="chap-002.xhtml#note-1"><sup>1</sup></a>"#),
+        "{a}"
+    );
+    let note1 = &b[b.find(r#"<aside epub:type="footnote" id="note-1">"#).expect("aside 1")..];
+    assert!(note1.contains(r##"<a href="chap-001.xhtml#appel-1">↩</a>"##), "{b}");
+    assert!(b.contains(r##"id="appel-2" href="#note-2""##), "{b}");
+    assert!(b.contains(r##"<a href="#appel-2">↩</a>"##), "{b}");
+}
+
+#[test]
+fn appel_repete_dans_deux_chapitres_ids_uniques_dans_le_livre() {
+    let md = "# A\n\nX[^1-1]\n\n# B\n\nY[^1-1]\n\n[^1-1]: N.\n";
+    let (_d, c) = fabriquer(md, None);
+    let e = entrees(&c);
+    let a = texte(&e, "OEBPS/chap-001.xhtml");
+    let b = texte(&e, "OEBPS/chap-002.xhtml");
+    assert!(a.contains(r##"id="appel-1" href="chap-002.xhtml#note-1""##), "{a}");
+    assert!(b.contains(r##"id="appel-1-2" href="#note-1""##), "{b}");
+    assert!(b.contains(r##"<a href="chap-001.xhtml#appel-1">↩</a>"##), "{b}");
+}
+
+#[test]
 fn titre_vide_retombe_sur_le_titre_du_livre() {
     let (_d, c) = fabriquer("#\n\nx\n", None);
     let e = entrees(&c);
@@ -206,7 +235,7 @@ fn epubcheck() {
         eprintln!("EPUBCHECK_JAR non défini");
         return;
     };
-    let md = "<!-- @p1 1,2,3,4 -->\n# Un\n\nTexte[^1-1] et[^2-*].\n\n## Sous\n\nSuite 1<sup>er</sup>.\n\n[^1-1]: N1.\n\n[^2-*]: N2.\n\n# Deux\n\nAutre.\n";
+    let md = "<!-- @p1 1,2,3,4 -->\n# Un\n\nTexte[^1-1] et[^2-*] puis[^3-3].\n\n## Sous\n\nSuite 1<sup>er</sup>.\n\n[^1-1]: N1.\n\n[^2-*]: N2.\n\n# Deux\n\nAutre.\n\n[^3-3]: N3, en fin de livre.\n";
     let (_d, c) = fabriquer(md, Some(PNG));
     let s = std::process::Command::new("java").args(["-jar", &jar]).arg(&c).status().unwrap();
     assert!(s.success());

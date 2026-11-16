@@ -6,7 +6,7 @@ use std::path::Path;
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
 use crate::chapitres::Chapitre;
-use crate::xhtml::{echapper, page};
+use crate::xhtml::{echapper, nom_chapitre, page};
 use crate::{ErreurEpub, Metadonnees};
 
 const CSS: &str = include_str!("style.css");
@@ -18,10 +18,6 @@ fn zip_err(e: zip::result::ZipError) -> ErreurEpub {
         zip::result::ZipError::Io(e) => ErreurEpub::Ecriture(e),
         e => ErreurEpub::Zip(e.to_string()),
     }
-}
-
-fn nom_chapitre(i: usize) -> String {
-    format!("chap-{:03}.xhtml", i + 1)
 }
 
 fn nav(chapitres: &[Chapitre], meta: &Metadonnees) -> String {

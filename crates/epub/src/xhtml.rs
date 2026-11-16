@@ -1,6 +1,6 @@
 //! Rendu XHTML : corps de chapitre, notes, pages complètes.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use pulldown_cmark::{Event, html::push_html};
 
@@ -68,9 +68,14 @@ fn assainir_html(html: &str) -> String {
     sortie
 }
 
+/// Nom du fichier XHTML du chapitre d'indice `i` (base 0).
+pub fn nom_chapitre(i: usize) -> String {
+    format!("chap-{:03}.xhtml", i + 1)
+}
+
 /// Remplace les triplets `[`, `^étiquette`, `]` (appel sans définition,
 /// que pulldown-cmark laisse en texte) par un `FootnoteReference`.
-fn fusionner_appels_orphelins(evenements: Vec<Event<'static>>) -> Vec<Event<'static>> {
+pub fn fusionner_appels_orphelins(evenements: Vec<Event<'static>>) -> Vec<Event<'static>> {
     let mut sortie: Vec<Event<'static>> = Vec::new();
     let mut it = evenements.into_iter().peekable();
     while let Some(e) = it.next() {
@@ -94,33 +99,74 @@ fn fusionner_appels_orphelins(evenements: Vec<Event<'static>>) -> Vec<Event<'sta
     sortie
 }
 
+/// Renvois de notes à l'échelle du livre : un appel peut se trouver dans un autre
+/// chapitre que sa définition (notes de fin de livre). Les identifiants `appel-…`
+/// sont numérotés sur tout le livre, donc uniques.
 #[derive(Default)]
-struct Appels {
-    definis: HashSet<String>,
+pub struct Renvois {
+    /// Étiquette → chapitre de sa (première) définition.
+    definitions: HashMap<String, usize>,
+    /// Étiquette → chapitre de son premier appel.
+    premiers_appels: HashMap<String, usize>,
+    /// Appels déjà rendus par étiquette.
     comptes: HashMap<String, usize>,
 }
 
-fn rendre(evenements: Vec<Event<'static>>, appels: &mut Appels) -> String {
+impl Renvois {
+    /// Recense les appels et définitions d'un chapitre, dans l'ordre du rendu
+    /// (corps puis contenu des notes).
+    pub fn recenser(
+        &mut self,
+        chapitre: usize,
+        evenements: &[Event<'static>],
+        notes: &[(String, Vec<Event<'static>>)],
+    ) {
+        let mut appels = |evts: &[Event<'static>]| {
+            for e in evts {
+                if let Event::FootnoteReference(l) = e {
+                    self.premiers_appels.entry(l.to_string()).or_insert(chapitre);
+                }
+            }
+        };
+        appels(evenements);
+        for (_, contenu) in notes {
+            appels(contenu);
+        }
+        for (label, _) in notes {
+            self.definitions.entry(label.clone()).or_insert(chapitre);
+        }
+    }
+}
+
+/// Lien vers `#<prefixe>-<id>`, préfixé du fichier cible s'il diffère du chapitre courant.
+fn lien(cible: usize, courant: usize, prefixe: &str, id: &str) -> String {
+    let fichier = if cible == courant { String::new() } else { nom_chapitre(cible) };
+    format!("{fichier}#{prefixe}-{id}")
+}
+
+fn rendre(evenements: Vec<Event<'static>>, chapitre: usize, renvois: &mut Renvois) -> String {
     let mut rendus = Vec::new();
-    for e in fusionner_appels_orphelins(evenements) {
+    for e in evenements {
         rendus.push(match e {
             Event::Html(h) => Event::Html(assainir_html(&h).into()),
             Event::InlineHtml(h) => Event::InlineHtml(assainir_html(&h).into()),
             Event::FootnoteReference(l) => {
                 let (id, affiche) = decomposer(&l);
                 let (id, affiche) = (echapper(id), echapper(affiche));
-                if !appels.definis.contains(&l.to_string()) {
-                    Event::Html(format!("<sup>{affiche}</sup>").into())
-                } else {
-                    let n = appels.comptes.entry(l.to_string()).or_insert(0);
-                    *n += 1;
-                    let suffixe = if *n == 1 { String::new() } else { format!("-{n}") };
-                    Event::Html(
-                        format!(
-                            "<a epub:type=\"noteref\" id=\"appel-{id}{suffixe}\" href=\"#note-{id}\"><sup>{affiche}</sup></a>"
+                match renvois.definitions.get(&*l) {
+                    None => Event::Html(format!("<sup>{affiche}</sup>").into()),
+                    Some(&definition) => {
+                        let n = renvois.comptes.entry(l.to_string()).or_insert(0);
+                        *n += 1;
+                        let suffixe = if *n == 1 { String::new() } else { format!("-{n}") };
+                        let href = lien(definition, chapitre, "note", &id);
+                        Event::Html(
+                            format!(
+                                "<a epub:type=\"noteref\" id=\"appel-{id}{suffixe}\" href=\"{href}\"><sup>{affiche}</sup></a>"
+                            )
+                            .into(),
                         )
-                        .into(),
-                    )
+                    }
                 }
             }
             e => e,
@@ -131,16 +177,22 @@ fn rendre(evenements: Vec<Event<'static>>, appels: &mut Appels) -> String {
     sortie
 }
 
-pub fn rendre_corps(evenements: Vec<Event<'static>>, notes: Vec<(String, Vec<Event<'static>>)>) -> String {
-    let mut appels = Appels { definis: notes.iter().map(|(l, _)| l.clone()).collect(), ..Appels::default() };
-    let mut corps = rendre(evenements, &mut appels);
+/// Corps XHTML du chapitre d'indice `chapitre` ; `evenements` et `notes` doivent
+/// avoir été recensés dans `renvois` (avec les appels orphelins déjà fusionnés).
+pub fn rendre_corps(
+    chapitre: usize,
+    evenements: Vec<Event<'static>>,
+    notes: Vec<(String, Vec<Event<'static>>)>,
+    renvois: &mut Renvois,
+) -> String {
+    let mut corps = rendre(evenements, chapitre, renvois);
     for (label, contenu) in notes {
         let (id, _) = decomposer(&label);
         let id = echapper(id);
         corps.push_str(&format!("<aside epub:type=\"footnote\" id=\"note-{id}\">\n"));
-        corps.push_str(&rendre(contenu, &mut appels));
-        if appels.comptes.contains_key(&label) {
-            corps.push_str(&format!("<p><a href=\"#appel-{id}\">↩</a></p>\n"));
+        corps.push_str(&rendre(contenu, chapitre, renvois));
+        if let Some(&appel) = renvois.premiers_appels.get(&label) {
+            corps.push_str(&format!("<p><a href=\"{}\">↩</a></p>\n", lien(appel, chapitre, "appel", &id)));
         }
         corps.push_str("</aside>\n");
     }
