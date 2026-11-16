@@ -14,7 +14,7 @@ pub struct Rect {
     pub y1: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Moitie {
     Entiere,
     Gauche,
@@ -41,7 +41,7 @@ pub struct Page {
 }
 
 /// Position d'un bloc dans le PDF : page (base 1), moitié, rectangle en millièmes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Ancre {
     pub page: u32,
     pub moitie: Moitie,

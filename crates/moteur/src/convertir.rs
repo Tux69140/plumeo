@@ -128,7 +128,7 @@ pub fn convertir_livre(
     }
 
     let source = forcer_titres.unwrap_or(reglages.titres);
-    let (blocs, pts, source_titres, retraits_titres) = detecter_titres(blocs, &doc.signets(), nb_pages, source);
+    let (blocs, pts, source_titres, retraits_titres, illisibles) = detecter_titres(blocs, &doc.signets(), nb_pages, source);
     points.extend(pts);
     retraits.extend(retraits_titres);
     let (blocs, retraits_notes, pts) = notes_regroupees(blocs, &mut etiqueteuse, &vocab);
@@ -136,7 +136,7 @@ pub fn convertir_livre(
     points.extend(pts);
     let sommaires: BTreeSet<u32> =
         points.iter().filter(|p| p.genre == GenrePoint::Sommaire).map(|p| p.ancre.page).collect();
-    let blocs = nettoyer_sauts(raccorder_pages(blocs, &vocab, &sommaires));
+    let blocs = nettoyer_sauts(raccorder_pages(blocs, &vocab, &sommaires, &illisibles));
 
     let nb_notes = blocs.iter().filter(|b| matches!(b, Bloc::Note { .. })).count();
     Ok(Conversion { markdown: ecrire_markdown(&blocs), retraits, points, source_titres, nb_pages, nb_notes })

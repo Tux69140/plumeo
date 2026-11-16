@@ -370,8 +370,15 @@ fn fusionner(p: &mut Paragraphe, suite: Paragraphe, vocab: &Vocabulaire) {
 /// Raccorde les paragraphes coupés par un saut de page. Les notes situées entre
 /// les deux sont sautées (elles gardent leur place) ; un titre bloque le raccord,
 /// de même qu'une page de sommaire d'un côté ou de l'autre (ses lignes restent seules),
-/// ou deux entrées numérotées de même genre (« IV. » puis « V. »).
-pub fn raccorder_pages(blocs: Vec<Bloc>, vocab: &Vocabulaire, pages_sommaire: &BTreeSet<u32>) -> Vec<Bloc> {
+/// ou deux entrées numérotées de même genre (« IV. » puis « V. »). Un paragraphe dont
+/// l'ancre est dans `isoles` (ligne illisible refusée comme titre) ne se raccorde ni
+/// à ce qui précède ni à ce qui suit : il reste seul.
+pub fn raccorder_pages(
+    blocs: Vec<Bloc>,
+    vocab: &Vocabulaire,
+    pages_sommaire: &BTreeSet<u32>,
+    isoles: &HashSet<Ancre>,
+) -> Vec<Bloc> {
     let mut sortie: Vec<Bloc> = Vec::new();
     // (Demi-)page où finit le dernier paragraphe : celle de son ancre, ou de la suite qui
     // lui a été collée. Seul le premier paragraphe de la (demi-)page suivante peut s'y raccorder.
@@ -389,7 +396,8 @@ pub fn raccorder_pages(blocs: Vec<Bloc>, vocab: &Vocabulaire, pages_sommaire: &B
                 .is_some_and(|c| !PONCTUATION_FINALE.contains(&c));
             let sommaire = pages_sommaire.contains(&p.ancre.page) || pages_sommaire.contains(&suite.ancre.page);
             let entrees = enumeration(&suite.texte_brut()).is_some_and(|e| enumeration(&p.texte_brut()) == Some(e));
-            if autre_page && ouvert && !sommaire && !entrees && !suite.texte_brut().is_empty() {
+            let isole = isoles.contains(&p.ancre) || isoles.contains(&suite.ancre);
+            if autre_page && ouvert && !sommaire && !entrees && !isole && !suite.texte_brut().is_empty() {
                 fusionner(p, suite, vocab);
                 fin = Some(debut_suite);
                 continue;
@@ -621,17 +629,17 @@ mod tests {
     #[test]
     fn raccord_inter_pages() {
         let blocs = vec![para("ce que", 4, 0.8), para("l'on dit", 5, 0.1)];
-        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new());
+        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new());
         assert_eq!(r.len(), 1);
         assert_eq!(texte_de(&r[0]), "ce que l'on dit");
         assert_eq!(r[0].ancre().page, 4);
 
         let blocs = vec![para("la fin.", 4, 0.8), para("Suite", 5, 0.1)];
-        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new()).len(), 2);
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new()).len(), 2);
 
         let titre = Bloc::Titre { niveau: 1, texte: "T".into(), ancre: para("", 5, 0.1).ancre() };
         let blocs = vec![para("ce que", 4, 0.8), titre];
-        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new()).len(), 2);
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new()).len(), 2);
     }
 
     #[test]
@@ -643,7 +651,7 @@ mod tests {
             ancre: para("", 4, 0.9).ancre(),
         };
         let blocs = vec![para("ce que", 4, 0.8), note, para("l'on dit", 5, 0.1)];
-        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new());
+        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new());
         assert_eq!(r.len(), 2);
         assert_eq!(texte_de(&r[0]), "ce que l'on dit");
         assert!(matches!(r[1], Bloc::Note { .. }));
@@ -663,14 +671,14 @@ mod tests {
     fn pas_de_raccord_avec_une_page_de_sommaire() {
         let sommaire = BTreeSet::from([6]);
         let blocs = vec![para("benjamin@exemple.com", 5, 0.8), para("RÉSUMÉ", 6, 0.1)];
-        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &sommaire).len(), 2);
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &sommaire, &HashSet::new()).len(), 2);
         let blocs = vec![para("TRADITION CABALISTIQUE", 6, 0.8), para("CHAPITRE 6:", 7, 0.1)];
-        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &sommaire).len(), 2);
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &sommaire, &HashSet::new()).len(), 2);
     }
 
     #[test]
     fn raccord_ignore_l_appel_de_note_final() {
-        let r = raccorder_pages(vec![para_avec_fin("la fin.", appel()), para("Suite", 5, 0.1)], &Vocabulaire::default(), &BTreeSet::new());
+        let r = raccorder_pages(vec![para_avec_fin("la fin.", appel()), para("Suite", 5, 0.1)], &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new());
         assert_eq!(r.len(), 2);
     }
 
@@ -679,13 +687,13 @@ mod tests {
         let r = raccorder_pages(vec![
             para_avec_fin("la fin.", Segment::Exposant("1".into())),
             para("Suite", 5, 0.1),
-        ], &Vocabulaire::default(), &BTreeSet::new());
+        ], &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new());
         assert_eq!(r.len(), 2);
     }
 
     #[test]
     fn raccord_malgre_un_appel_de_note_apres_un_mot() {
-        let r = raccorder_pages(vec![para_avec_fin("ce que", appel()), para("l'on dit", 5, 0.1)], &Vocabulaire::default(), &BTreeSet::new());
+        let r = raccorder_pages(vec![para_avec_fin("ce que", appel()), para("l'on dit", 5, 0.1)], &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new());
         assert_eq!(r.len(), 1);
         assert_eq!(texte_de(&r[0]), "ce que1 l'on dit");
     }
@@ -693,18 +701,18 @@ mod tests {
     #[test]
     fn pas_de_raccord_sur_la_meme_page() {
         let blocs = vec![para("ce que", 4, 0.1), para("l'on dit", 4, 0.3)];
-        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new()).len(), 2);
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new()).len(), 2);
     }
 
     #[test]
     fn raccord_recolle_une_cesure() {
         let blocs = vec![para("mer-", 4, 0.8), para("veilleux", 5, 0.1)];
-        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new());
+        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new());
         assert_eq!(texte_de(&r[0]), "merveilleux");
         let blocs = vec![para("dites-", 4, 0.8), para("vous bien", 5, 0.1)];
-        assert_eq!(texte_de(&raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new())[0]), "dites-vous bien");
+        assert_eq!(texte_de(&raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new())[0]), "dites-vous bien");
         let blocs = vec![para("le Saint-", 4, 0.8), para("Esprit", 5, 0.1)];
-        assert_eq!(texte_de(&raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new())[0]), "le Saint-Esprit");
+        assert_eq!(texte_de(&raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new())[0]), "le Saint-Esprit");
     }
 
     /// Lignes pleines (sans blanc de fin de paragraphe) aux hauteurs données.
@@ -738,12 +746,27 @@ mod tests {
     }
 
     #[test]
+    fn pas_de_raccord_avec_un_paragraphe_isole() {
+        // Fin de p4 isolée (ligne refusée comme titre) : elle ne happe pas le corps de p5.
+        let blocs = vec![para("ligne refusée sans point", 4, 0.8), para("corps du texte", 5, 0.1)];
+        let isoles = HashSet::from([blocs[0].ancre()]);
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &isoles).len(), 2);
+        // Début de p5 isolé : il ne se colle pas au corps ouvert de p4.
+        let blocs = vec![para("ce que", 4, 0.8), para("ligne refusée", 5, 0.1)];
+        let isoles = HashSet::from([blocs[1].ancre()]);
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &isoles).len(), 2);
+        // Sans l'ensemble, les deux se raccordent.
+        let blocs = vec![para("ce que", 4, 0.8), para("ligne refusée", 5, 0.1)];
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new()).len(), 1);
+    }
+
+    #[test]
     fn raccord_n_unit_pas_deux_entrees_numerotees() {
         let blocs = vec![para("IV. Le fleuve de la vie", 5, 0.8), para("V. L'avènement", 6, 0.1)];
-        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new()).len(), 2);
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new()).len(), 2);
         // Une suite qui n'est pas une entrée se raccorde toujours.
         let blocs = vec![para("IV. Le fleuve de la", 5, 0.8), para("vie éternelle", 6, 0.1)];
-        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new());
+        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new());
         assert_eq!(texte_de(&r[0]), "IV. Le fleuve de la vie éternelle");
     }
 
@@ -751,14 +774,14 @@ mod tests {
     fn raccord_sans_chaine_de_fusions() {
         // Seul le dernier paragraphe d'une page se raccorde au premier de la suivante.
         let blocs = vec![para("ce que", 4, 0.8), para("l'on dit", 5, 0.1), para("suite sans point", 5, 0.3)];
-        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new());
+        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new());
         assert_eq!(r.len(), 2);
         assert_eq!(texte_de(&r[0]), "ce que l'on dit");
         assert_eq!(r[0].ancre().page, 4);
         assert_eq!(texte_de(&r[1]), "suite sans point");
         // Un paragraphe qui remplit toute une page se raccorde des deux côtés.
         let blocs = vec![para("ce que", 4, 0.8), para("l'on dit", 5, 0.1), para("encore", 6, 0.1)];
-        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new());
+        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new());
         assert_eq!(texte_de(&r[0]), "ce que l'on dit encore");
         assert_eq!(r.len(), 1);
     }
@@ -829,7 +852,7 @@ mod tests {
     #[test]
     fn pas_de_raccord_a_travers_un_saut() {
         let blocs = vec![para("ISBN 2-85566-476-4", 3, 0.8), saut(4), para("Le lecteur comprendra", 4, 0.1)];
-        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new());
+        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new());
         assert_eq!(genres(&r), "PSP");
     }
 
