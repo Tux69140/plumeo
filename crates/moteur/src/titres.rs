@@ -2714,7 +2714,8 @@ mod tests {
                 "[Première conférence.](#t-première-conférence)",
             ]
         );
-        // Sans titre après le sommaire, l'entrée la plus longue l'emporte.
+        // Sans titre après le sommaire, l'entrée de deux paragraphes, seule à viser un
+        // titre, est retenue (étendues en concurrence : test suivant).
         let blocs = vec![
             titre_en(1, 6, "LE SENS DE L’AMOUR DANS LE MONDE MORALE ANTHROPOSOPHIQUE"),
             titre_en(1, 7, "MORALE ANTHROPOSOPHIQUE"),
@@ -2730,6 +2731,42 @@ mod tests {
             rendu_sommaire(&blocs)[4],
             "[LE SENS DE L’AMOUR DANS LE MONDE MORALE ANTHROPOSOPHIQUE](#t-le-sens-de-l-amour-dans-le-monde-morale-anthroposophique)"
         );
+    }
+
+    /// Livre dont la page `page_sommaire` porte les entrées « Un », « Deux », « Trois »,
+    /// « Quatre », et dont les titres sont `titres_du_corps` : (page, texte).
+    fn sommaire_un_deux_trois(page_sommaire: u32, titres_du_corps: &[(u32, &str)]) -> Vec<String> {
+        let mut blocs: Vec<Bloc> = titres_du_corps.iter().map(|&(page, texte)| titre_en(1, page, texte)).collect();
+        for (k, texte) in ["Un", "Deux", "Trois", "Quatre"].into_iter().enumerate() {
+            blocs.push(para_en(page_sommaire, 100 + 40 * k as u16, texte, false));
+        }
+        let nb_titres = titres_du_corps.len();
+        let (blocs, _) = sommaire_cliquable(blocs, "");
+        rendu_sommaire(&blocs)[nb_titres..].to_vec()
+    }
+
+    #[test]
+    fn deux_etendues_visent_un_titre_apres_le_sommaire_la_plus_longue_l_emporte() {
+        let rendu = sommaire_un_deux_trois(2, &[(5, "Un"), (6, "Un Deux"), (7, "Trois"), (8, "Quatre")]);
+        assert_eq!(rendu, ["[Un Deux](#t-un-deux)", "[Trois](#t-trois)", "[Quatre](#t-quatre)"]);
+    }
+
+    #[test]
+    fn deux_etendues_visent_un_titre_avant_le_sommaire_la_plus_longue_l_emporte() {
+        // Aucun titre après le sommaire : « à défaut, la plus longue qui en vise un ».
+        let rendu = sommaire_un_deux_trois(20, &[(5, "Un"), (6, "Un Deux"), (7, "Trois"), (8, "Quatre")]);
+        assert_eq!(rendu, ["[Un Deux](#t-un-deux)", "[Trois](#t-trois)", "[Quatre](#t-quatre)"]);
+    }
+
+    #[test]
+    fn etendue_qui_vise_apres_le_sommaire_l_emporte_sur_une_plus_longue_qui_vise_avant() {
+        // Trois étendues : la plus longue vise un titre avant le sommaire (faux-titre), les
+        // deux autres un titre après ; la plus longue de ces deux-là l'emporte.
+        let rendu = sommaire_un_deux_trois(
+            7,
+            &[(6, "Un Deux Trois"), (10, "Un Deux"), (11, "Un"), (12, "Trois"), (13, "Quatre")],
+        );
+        assert_eq!(rendu, ["[Un Deux](#t-un-deux)", "[Trois](#t-trois)", "[Quatre](#t-quatre)"]);
     }
 
     #[test]
