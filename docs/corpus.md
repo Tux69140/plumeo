@@ -202,7 +202,12 @@ Chacune a son test unitaire, sans PDF du corpus.
    « Notes », ouverte au paragraphe de la note 1 si les notes 2 et 3 ouvrent des
    paragraphes dans les 8 blocs suivants et si les appels « 1 », « 2 » et « 3 » les
    précèdent ; un « [n+1] »
-   collé en fin de note (« … 5e partie. [32] ») ouvre la note suivante.
+   collé en fin de note (« … 5e partie. [32] ») ouvre la note suivante ; (e) une
+   section de notes (explicite ou implicite) se ferme avant une (demi-)page sans aucun
+   marqueur de note (n° 6 : la suite de la note 53 p. 93d, le catalogue p. 94d-95d et
+   l'épigraphe p. 96 redeviennent du corps avec leurs ancres, au lieu d'être collés
+   aux notes orphelines « 53 » puis « 29 ») ; dans une section implicite, un paragraphe
+   sans marqueur ne continue une note que si elle est vide ou ouverte en bas de page.
 
 Défauts signalés aux revues précédentes et **non observés** sur le corpus : le motif
 `DEBUT_NOTE` qui couperait une note sur « 12 mars 1914 » (les dates en début de
@@ -249,7 +254,7 @@ l'ordre de lecture de la double page (n° 6).
   à vérifier ; les étiquettes de schémas donnent des titres parasites (plan 6).
 - n° 4 p. 3 et n° 5 p. 2 : l'année seule en bas de la page de titre (« 1980 »,
   « 1977 ») est retirée comme numéro de page, avec un point à vérifier.
-- n° 6 : la bibliographie qui suit les notes est lue comme une suite de notes sans
-  appel (points « note orpheline ») ; les titres de conférence ne sont pas détectés.
+- n° 6 : les titres de conférence ne sont pas détectés ; la bibliographie p. 95d,
+  redevenue du corps, garde un paragraphe par ligne du scan (« supé- » / « rieurs… »).
 - n° 2 : les annonces de l'auteur (« S.v.p. n'hésitez pas… ») que le PDF répète au
   milieu des pages restent dans le texte.

@@ -403,6 +403,14 @@ fn ouvre_section_implicite(blocs: &[Bloc], i: usize, portee: &[Bloc]) -> bool {
         && toutes_appelees(portee, &["1", "2", "3"])
 }
 
+/// La (demi-)page `page` porte-t-elle un paragraphe qui ouvre une note, parmi `blocs` ?
+fn page_a_marqueur(blocs: &[Bloc], page: (u32, Moitie)) -> bool {
+    blocs.iter().any(|b| match b {
+        Bloc::Paragraphe(p) => (p.ancre.page, p.ancre.moitie) == page && extraire_marqueur(&p.segments).is_some(),
+        _ => false,
+    })
+}
+
 /// Un titre termine la section de notes, sauf un intertitre (niveau 2 ou plus,
 /// « Chapitre 1 ») directement suivi d'un paragraphe qui commence par un marqueur
 /// de note : les notes de fin de livre sont souvent groupées par chapitre.
@@ -461,6 +469,12 @@ pub fn notes_regroupees(
                 continue;
             };
             let page = (p.ancre.page, p.ancre.moitie);
+            // Une (demi-)page sans aucun marqueur de note n'appartient pas à la section :
+            // elle se ferme avant elle (épigraphe, fin de livre après des notes).
+            if derniere.is_some_and(|d| d != page) && !page_a_marqueur(&blocs[j..fin], page) {
+                fin = j;
+                break;
+            }
             let nouvelles = if let Some((m, segments)) = extraire_marqueur(&p.segments) {
                 notes_enchainees(m, segments)
             } else if let Some(note) = notes.last_mut() {
@@ -1067,12 +1081,13 @@ mod tests {
 
     #[test]
     fn note_3_au_8e_bloc_suivant_ouvre_la_section() {
-        // Après le point 1 : point 2 (1er bloc), 6 paragraphes (2e à 7e), point 3 (8e bloc).
-        // Chaque paragraphe intercalé ouvre une page et continue la note 2, restée ouverte.
+        // Après le point 1 : point 2 (1er bloc), 6 sauts (2e à 7e), point 3 (8e bloc).
+        // Des sauts, neutres pour les notes : des paragraphes sans marqueur fermeraient
+        // la section (même page : règles a et b ; page sans marqueur).
         let mut blocs = vec![appels(&["1", "2", "3"])];
         blocs.extend(liste(2));
-        blocs.extend((5..11).map(|page| bloc_para(vec![texte("suite de la note")], page, 0.1)));
-        blocs.push(bloc_para(vec![texte("3. Point 3")], 11, 0.2));
+        blocs.extend((0..6).map(|_| Bloc::Saut { ancre: Ancre::depuis(4, Moitie::Entiere, rect(0.5)) }));
+        blocs.push(bloc_para(vec![texte("3. Point 3")], 4, 0.6));
         let (sortie, _, points) = notes_regroupees(blocs, &mut Etiqueteuse::new(), &Vocabulaire::default());
         assert!(points.is_empty(), "{points:?}");
         let marqueurs: Vec<String> = notes_du_livre(&sortie).into_iter().map(|(_, m, _)| m).collect();
@@ -1125,29 +1140,34 @@ mod tests {
 
     #[test]
     fn section_implicite_note_coupee_par_la_page() {
-        // Règle (b) : le premier paragraphe de la page suivante continue une note
-        // restée ouverte ; le paragraphe d'après termine la section.
+        // Règle (b) : le premier paragraphe de la page suivante (qui porte la note 4)
+        // continue une note restée ouverte ; un paragraphe sans marqueur après une note
+        // fermée, sur la même page, termine la section.
         let blocs = vec![
-            appels(&["1", "2", "3"]),
+            appels(&["1", "2", "3", "4"]),
             bloc_para(vec![texte("1. Texte un.")], 9, 0.7),
             bloc_para(vec![texte("2. Texte deux.")], 9, 0.8),
             bloc_para(vec![texte("3. Texte trois qui")], 9, 0.9),
             bloc_para(vec![texte("continue page suivante.")], 10, 0.1),
-            bloc_para(vec![texte("Corps.")], 10, 0.2),
+            bloc_para(vec![texte("4. Texte quatre.")], 10, 0.2),
+            bloc_para(vec![texte("Corps.")], 10, 0.3),
         ];
-        let attendu = paragraphes(&blocs[5..]);
+        let attendu = paragraphes(&blocs[6..]);
         let (sortie, _, points) = notes_regroupees(blocs, &mut Etiqueteuse::new(), &Vocabulaire::default());
         assert!(points.is_empty(), "{points:?}");
         assert_eq!(texte_note(&sortie[3]), "Texte trois qui continue page suivante.");
+        assert_eq!(texte_note(&sortie[4]), "Texte quatre.");
         assert_eq!(paragraphes(&sortie)[1..], attendu[..]);
 
-        // Note fermée en bas de page : le premier paragraphe de la page suivante est du corps.
+        // Note fermée en bas de page : le premier paragraphe de la page suivante est du
+        // corps, même si la page porte ensuite un marqueur.
         let blocs = vec![
             appels(&["1", "2", "3"]),
             bloc_para(vec![texte("1. Texte un.")], 9, 0.7),
             bloc_para(vec![texte("2. Texte deux.")], 9, 0.8),
             bloc_para(vec![texte("3. Texte trois.")], 9, 0.9),
             bloc_para(vec![texte("Corps de la page suivante.")], 10, 0.1),
+            bloc_para(vec![texte("4. Point quatre.")], 10, 0.2),
         ];
         let attendu = paragraphes(&blocs[4..]);
         let (sortie, _, _) = notes_regroupees(blocs, &mut Etiqueteuse::new(), &Vocabulaire::default());
@@ -1175,6 +1195,48 @@ mod tests {
         let rendus = paragraphes(&sortie);
         assert_eq!(rendus[rendus.len() - corps.len()..], attendu[..]);
         assert!(matches!(sortie.last(), Some(Bloc::Paragraphe(p)) if p.texte_brut() == "La Philosophie de la Liberté"));
+    }
+
+    #[test]
+    fn demi_page_sans_marqueur_ferme_la_section() {
+        // Connaissance p. 95d-96d : la note « 29 », ouverte, finit la demi-page 95d ; la
+        // demi-page 96d n'a aucun marqueur de note : la section se ferme avant elle, ses
+        // paragraphes restent du corps avec leurs ancres.
+        let blocs = vec![
+            appels(&["1", "29"]),
+            titre("NOTES", 2, 91),
+            bloc_droite("1 Texte un.", 91, 0.2),
+            bloc_droite("29 Données de base, Editions du Centre Triades, Paris", 95, 0.8),
+            bloc_droite("compositeur travaille d'après des bases", 96, 0.1),
+            bloc_droite("établies par la science musicale.", 96, 0.15),
+            bloc_droite("R. Steiner", 96, 0.8),
+        ];
+        let attendu = paragraphes(&blocs[4..]);
+        let (sortie, retraits, points) = notes_regroupees(blocs, &mut Etiqueteuse::new(), &Vocabulaire::default());
+        assert!(points.is_empty(), "{points:?}");
+        assert_eq!(retraits.len(), 1);
+        let notes = notes_du_livre(&sortie);
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[1].2, "Données de base, Editions du Centre Triades, Paris");
+        assert_eq!(paragraphes(&sortie)[1..], attendu[..]);
+    }
+
+    #[test]
+    fn note_continuee_sur_une_page_qui_porte_un_marqueur() {
+        // La page suivante commence par la fin de la note 1, puis ouvre la note 2 :
+        // elle porte un marqueur, la section continue et la suite reste dans la note 1.
+        let blocs = vec![
+            appels(&["1", "2"]),
+            titre("Notes", 2, 9),
+            bloc_para(vec![texte("1 Texte un qui")], 9, 0.8),
+            bloc_para(vec![texte("continue ici.")], 10, 0.1),
+            bloc_para(vec![texte("2 Texte deux.")], 10, 0.2),
+        ];
+        let (sortie, _, points) = notes_regroupees(blocs, &mut Etiqueteuse::new(), &Vocabulaire::default());
+        assert!(points.is_empty(), "{points:?}");
+        let textes: Vec<String> = notes_du_livre(&sortie).into_iter().map(|(_, _, t)| t).collect();
+        assert_eq!(textes, ["Texte un qui continue ici.", "Texte deux."]);
+        assert_eq!(paragraphes(&sortie).len(), 1);
     }
 
     #[test]
