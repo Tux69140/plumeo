@@ -29,6 +29,8 @@ Communes à chaque livre :
 - longueur médiane des paragraphes entre 80 et 1 500 caractères, maximum ≤ 8 000 ;
 - ancres croissantes en (page, moitié) — les définitions de notes, déplacées en fin de
   chapitre par le Markdown interne, ne comptent pas ;
+- le Markdown commence par un titre `#` égal au titre du livre (premier bloc, texte
+  normalisé) — voir plus bas la dérogation du n° 6 ;
 - au moins 1 retrait si la série a des zones non nulles ;
 - epubcheck sans erreur (si `EPUBCHECK_JAR`).
 
@@ -47,7 +49,7 @@ Propres à un livre (un champ absent ou `null` n'est pas vérifié) :
 | `notes_pages` | `{ "page", "marqueur" }` : au moins une note ancrée sur la page (de ce marqueur) |
 | `notes_min` | nombre minimal de notes appariées |
 | `sans_notes_pages` | aucune note ancrée sur ces pages |
-| `absent_regex` | aucun paragraphe ne vérifie ces motifs |
+| `absent_regex` | aucun paragraphe ne vérifie ces motifs (les notes, titres, sauts et entrées de sommaire ne sont pas des paragraphes) |
 | `moities` | ancres en `g` et en `d` (double page) |
 | `duree_max_s` | durée maximale de conversion (en `--release`) |
 
@@ -58,6 +60,12 @@ titre de niveau 1, s'il porte ce titre (texte normalisé), est hors de `titres_n
 de n1 1 à n1 0 (son titre « CONNAISSANCE LOGIQUE PENSÉE PRATIQUE », déjà détecté, est le
 titre du livre).
 
+Le test lit les blocs du Markdown interne par genre : titre, note (`[^…]:`), saut de
+section (`* * *`), entrée de sommaire (`[texte](#t-…)`) ou paragraphe. Un saut n'est ni un
+paragraphe ni un titre : il est hors des statistiques de paragraphes (médiane, maximum,
+`absent_regex`) ; il porte son ancre comme tout bloc. Les sauts séparent les pages courtes
+(page de titre, ISBN, avis, colophon, 4e de couverture) du texte qui suit.
+
 Les entrées d'un sommaire imprimé rendues cliquables (lignes `[texte](#t-…)`) ne sont pas des
 paragraphes : elles sont hors des statistiques de paragraphes. Le titre « Table des matières »
 ou « Sommaire » de niveau 1 suivi d'une entrée est lui aussi un titre de service, hors des
@@ -65,9 +73,15 @@ mêmes décomptes. Chronique de l'Akasha passe ainsi de `titres_n1` 23 à 22 : s
 (signet) mène désormais à 12 entrées cliquables. Approche de la Cité céleste attend 22 entrées
 (17 chapitres et les 5 parties du chapitre 17).
 
-`derogations` (`raison`, `mediane_paragraphes_min`, `nombres_isoles_pages`) assouplit
+`derogations` (`raison`, `mediane_paragraphes_min`, `nombres_isoles_pages`,
+`titre_livre_apres_couverture`) assouplit
 une attente **commune** que le livre ne peut pas tenir, pour une raison mesurée et
 consignée ci-dessous ; la raison est affichée à chaque passage du test.
+
+Dérogation au titre du livre en tête : Connaissance (n° 6) commence par « Rudolf Steiner »
+(nom de l'auteur, en gras, p. 1g) avant le titre, déjà détecté comme premier titre `#` du
+livre ; `convertir_livre` ne déplace pas un titre existant. Pour ce livre, seul le premier
+titre `#` doit être le titre du livre (`titre_livre_apres_couverture`).
 
 ## Séries
 
@@ -98,15 +112,16 @@ Aucun livre n'a eu besoin d'une autre série.
 ## Résultats (2026-11-10)
 
 Conversion en `--release`, epubcheck 5.4.0 : **les 9 EPUB sont valides**, le test passe.
+Les durées sont celles du dernier passage (2026-11-16, après les retours du contrôle visuel).
 
 | # | Attendu | Mesuré | Durée |
 |---|---|---|---|
 | 1 | signets, ~~73~~ ~~27~~ **17** n1 + 5 n2 dont « VISITE À PATMOS » (voir plus bas) ; ≥ 46 notes appariées | signets, 17 n1 + 5 n2 (« 1 VISITE À PATMOS »…) ; 46 notes appariées ; médiane 419 car. | 0,3 s |
 | 2 | gras-majuscules, 10 n1 tous à partir de la p. 19, dont « LES 4 ÉLÉMENTS », « LA GENÈSE », « LUCIFER ET LE CHRIST » (attente réécrite, voir plus bas) | gras-majuscules, les 10 ouvertures du corps (pp. 19, 26, 31, 32, 33, 36, 38, 40, 53, 56) ; 29 n2 ; 48 titres courants retirés ; résumé pp. 6-11 en sommaire ; médiane **35** (dérogation) | 0,8 s |
-| 3 | pas de titre courant ; note `*` p. 36 ; 5 à 60 n1 | 0 titre courant ; 7 notes dont `*` p. 36 ; 18 n1 : les 11 chapitres, 2 titres de couverture, 5 fragments de schémas ou d'OCR | 1,7 s |
-| 4 | signets, 23 titres | signets, 23 n1, 0 n2 | 0,6 s |
+| 3 | pas de titre courant ; note `*` p. 36 ; 5 à 60 n1 | 0 titre courant ; 7 notes dont `*` p. 36 ; 14 n1 (les titres illisibles, `# Corps m\--`, `# np`, `# s`…, restent des paragraphes avec un point à vérifier) | 1,2 s |
+| 4 | signets, 22 titres (23 moins « SOMMAIRE », titre de service) | signets, 22 n1, 0 n2, 12 entrées de sommaire | 0,7 s |
 | 5 | signets, 4 n1 et 7 n2 | signets, 4 n1, 7 n2 | 0,3 s |
-| 6 | `g` et `d` ; pas de « 92 93 » ; ≥ 1 note appariée | `g` et `d` ; 0 pied résiduel ; 5 notes appariées | 0,2 s |
+| 6 | `g` et `d` ; pas de « 92 93 » ; ≥ 1 note appariée ; titre du livre en premier titre `#` (dérogation) | `g` et `d` ; 0 pied résiduel ; 5 notes appariées | 0,2 s |
 | 7 | se convertit ; EPUB valide | 28 n1 ; sommaire pp. 1-2 reconnu ; médiane 149 ; EPUB valide ; schéma p. 6 en texte (plan 6) | 1,6 s |
 | 8 | 19 n1 « CHAPITRE » ; pas de note p. 145 | 19 n1 « CHAPITRE » ; aucune note | 0,4 s |
 | 9 | ≥ 8 n1 « CHAPITRE » ; pas de note p. 367 ; < 60 s | 9 n1 dont 8 « CHAPITRE … » (+ « PREMIER CHAPITRE ») ; aucune note | 1,8 s |
@@ -134,7 +149,8 @@ pierre cubique » et descend d'un niveau (série romaine après des chapitres en
 arabes) : `titres_n1` passe de 27 à 17, `n2` de non vérifié à 5.
 
 **Puis `notes_min` 46** (retour du contrôle visuel) : les notes de fin « [1] » … « [46] »
-(pp. 134-136, sans titre « Notes ») sont appariées à leurs appels en exposant « [n] ».
+(pp. 134-136, sans titre « Notes ») sont appariées à leurs appels en exposant « [n] » ;
+`absent_regex` `^\[\d+\]$` garantit qu'aucune note ne reste un paragraphe « [n] » isolé.
 
 ### Attente du n° 2 réécrite : les chapitres du corps
 
@@ -230,9 +246,17 @@ paragraphe du n° 7 sont hors zone et hors section de notes). Aucun changement.
 
 ## Contrôle visuel (étape 4)
 
+Une première relecture (Foliate, Calibre) a donné les retours du jalon 1, corrigés ensuite
+sur `plan-1-retours` : sauts `* * *` aux pages courtes, entrées numérotées séparées,
+signets à plat fusionnés, notes `[N]` implicites, faux titres rejetés, titre du livre en
+tête, sommaire imprimé cliquable, paragraphes espacés. Les sorties à relire sont
+régénérées dans `plumeo-controle/` (ignoré par git). Le détail ci-dessous date du premier
+passage.
+
 Fait sans interface graphique, sur le contenu des EPUB n° 1, 3 et 6 (décompressés) :
 
-- **Table des matières** : n° 1, 27 entrées après la page de titre (« 1 VISITE À
+- **Table des matières** (premier passage ; depuis, n° 1 : 17 chapitres et 5 parties en
+  `##`, soit 22 entrées liées dans la page « Table des matières » imprimée) : n° 1, 27 entrées après la page de titre (« 1 VISITE À
   PATMOS » … « 17 LA CITÉ CÉLESTE », puis « I », « La pierre cubique » … « V »,
   « L'avènement de la Nouvelle Jérusalem ») ; n° 3, les 11 chapitres, plus 2 titres
   de couverture et 5 fragments de schémas ou d'OCR (« Corps m\-- », « s »… : plan 6) ;
