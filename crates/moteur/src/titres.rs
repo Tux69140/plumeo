@@ -317,15 +317,15 @@ static INITIALE_EN_TETE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\p{L}\
 
 /// Texte d'un titre sans son numéro en tête suivi d'un point (`NUMERO_POINTE_EN_TETE`),
 /// ou `None` s'il n'en a pas. Un numéro romain doit être bien formé (`numero_seul` :
-/// pas « IIII. ») ; une lettre seule suivie d'une autre initiale n'est pas un numéro
-/// (« C. G. JUNG »).
+/// pas « IIII. ») ; d'une seule lettre, il ne peut être que I, V ou X (« M. DUPONT » :
+/// pas un numéro), et pas suivi d'une autre initiale (« X. Y. Z. »).
 fn sans_numero_pointe(texte: &str) -> Option<&str> {
     let tete = NUMERO_POINTE_EN_TETE.captures(texte)?;
     let numero = tete.get(1)?.as_str();
     let reste = &texte[tete.get(0)?.end()..];
     let romain = !numero.starts_with(|c: char| c.is_ascii_digit());
-    let initiale = numero.chars().count() == 1 && INITIALE_EN_TETE.is_match(reste);
-    if romain && (numero_seul(numero).is_none() || initiale) {
+    let lettre_refusee = numero.len() == 1 && (!matches!(numero, "I" | "V" | "X") || INITIALE_EN_TETE.is_match(reste));
+    if romain && (numero_seul(numero).is_none() || lettre_refusee) {
         return None;
     }
     Some(reste)
@@ -3482,15 +3482,17 @@ mod tests {
             para_en(2, 180, "Mal formé 7", false),
             para_en(2, 220, "Alpha 8", false),
             para_en(2, 260, "Beta 9", false),
+            para_en(2, 300, "Dupont 10", false),
             titre_en(1, 5, "C. G. JUNG"),
             titre_en(1, 6, "V. LA SUITE"),
             titre_en(1, 7, "IIII. MAL FORMÉ"),
             titre_en(1, 8, "XIV. ALPHA"),
             titre_en(1, 9, "Beta"),
+            titre_en(1, 10, "M. DUPONT"),
         ];
         let (blocs, _, _) = sommaire_cliquable(blocs, "");
         assert_eq!(
-            rendu_sommaire(&blocs)[..5],
+            rendu_sommaire(&blocs)[..6],
             [
                 // « C. » suivi d'une autre initiale : pas un numéro.
                 "G. Jung 5".to_string(),
@@ -3499,6 +3501,8 @@ mod tests {
                 "Mal formé 7".to_string(),
                 lien("Alpha 8", "XIV. ALPHA"),
                 lien("Beta 9", "Beta"),
+                // Lettre seule autre que I, V ou X : pas un numéro.
+                "Dupont 10".to_string(),
             ]
         );
     }
