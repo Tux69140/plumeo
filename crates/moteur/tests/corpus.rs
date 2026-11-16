@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Instant;
 
-use plumeo_epub::{Metadonnees, generer_epub};
+use plumeo_epub::{Metadonnees, est_titre_de_sommaire, generer_epub};
 use plumeo_moteur::convertir_livre;
 use plumeo_moteur::metadonnees::proposer;
 use plumeo_moteur::modele::{Ancre, Moitie};
@@ -86,10 +86,10 @@ struct Attentes {
     #[serde(default)]
     moities: bool,
     /// `true` : l'EPUB doit avoir un chapitre « Table des matières » ou « Sommaire » à
-    /// liens, et c'est `chap-002.xhtml`. Sans cette attente, un tel chapitre n'est contrôlé
-    /// (position 2) que s'il existe.
+    /// liens, et c'est `chap-002.xhtml`. `false` (par défaut, champ absent) : un tel
+    /// chapitre n'est contrôlé (position 2) que s'il existe.
     #[serde(default)]
-    sommaire_en_tete: Option<bool>,
+    sommaire_en_tete: bool,
     /// Durée maximale de la conversion, en secondes (mesurée en `--release`).
     duree_max_s: Option<f64>,
 }
@@ -286,14 +286,20 @@ const LIEN_SOMMAIRE: &str = r#"href="chap-\d+\.xhtml#t-"#;
 /// l'EPUB ; la navigation (`nav.xhtml`) n'est pas comptée. Une entrée dont le titre
 /// visé manque est rendue en texte, sans lien : elle n'est pas comptée.
 fn liens_de_sommaire(epub: &Path) -> Result<usize, String> {
-    let lien = Regex::new(LIEN_SOMMAIRE).unwrap();
-    Ok(chapitres_epub(epub)?.iter().map(|(_, texte)| lien.find_iter(texte).count()).sum())
+    Ok(compter_liens(&chapitres_epub(epub)?))
 }
 
-/// Vérifie que le chapitre « Table des matières » ou « Sommaire » (titre H1, à la casse
-/// et aux accents près) qui contient des liens internes est `chap-002.xhtml`, juste après
-/// la page de titre. Si `attendu`, l'EPUB doit en plus avoir un tel chapitre : le contrôle
-/// ne passe pas à vide. Sinon, sans chapitre de ce genre, rien à vérifier.
+/// Nombre de liens d'entrée de sommaire dans les `chapitres` (voir `liens_de_sommaire`).
+fn compter_liens(chapitres: &[(String, String)]) -> usize {
+    let lien = Regex::new(LIEN_SOMMAIRE).unwrap();
+    chapitres.iter().map(|(_, texte)| lien.find_iter(texte).count()).sum()
+}
+
+/// Vérifie que le chapitre « Table des matières » ou « Sommaire » (titre H1, à la casse,
+/// aux accents et à la ponctuation près : `plumeo_epub::est_titre_de_sommaire`) qui
+/// contient des liens internes est `chap-002.xhtml`, juste après la page de titre. Si
+/// `attendu`, l'EPUB doit en plus avoir un tel chapitre : le contrôle ne passe pas à vide.
+/// Sinon, sans chapitre de ce genre, rien à vérifier.
 fn verifier_sommaire_en_tete(chapitres: &[(String, String)], attendu: bool) -> Result<(), String> {
     let h1 = Regex::new(r"(?s)<h1[^>]*>(.*?)</h1>").unwrap();
     let balises = Regex::new(r"<[^>]*>").unwrap();
@@ -301,8 +307,7 @@ fn verifier_sommaire_en_tete(chapitres: &[(String, String)], attendu: bool) -> R
     let mut trouve = false;
     for (nom, texte) in chapitres {
         let Some(c) = h1.captures(texte) else { continue };
-        let titre = normaliser(balises.replace_all(&c[1], "").trim());
-        if ["table des matieres", "sommaire"].contains(&titre.as_str()) && lien.is_match(texte) {
+        if est_titre_de_sommaire(&balises.replace_all(&c[1], "")) && lien.is_match(texte) {
             trouve = true;
             if nom != "chap-002.xhtml" {
                 return Err(format!(
@@ -320,40 +325,76 @@ fn verifier_sommaire_en_tete(chapitres: &[(String, String)], attendu: bool) -> R
     Ok(())
 }
 
-/// Mesures d'un EPUB généré (et validé par epubcheck si le jar est donné).
+/// Mesures d'un EPUB généré : sa structure, puis sa validation par epubcheck si le jar
+/// est donné.
 struct ControleEpub {
-    /// Nombre de liens d'entrée de sommaire (`liens_de_sommaire`).
-    liens: usize,
-    /// Résultat de `verifier_sommaire_en_tete`.
+    /// Nombre de liens d'entrée de sommaire (`compter_liens`), ou l'erreur de lecture de
+    /// l'archive.
+    liens: Result<usize, String>,
+    /// Résultat de `verifier_sommaire_en_tete` (`Ok` si l'archive n'a pu être lue : son
+    /// erreur est déjà dans `liens`).
     sommaire_en_tete: Result<(), String>,
-    /// epubcheck a été lancé (donc l'EPUB est valide : sinon l'appel renvoie une erreur).
+    /// Résultat d'epubcheck (`Ok` sans jar), ou l'échec de l'appel à java.
+    epubcheck: Result<(), String>,
+    /// java a vraiment été appelé avec le jar d'epubcheck.
     epubcheck_lance: bool,
 }
 
-/// Génère l'EPUB dans un dossier temporaire, le valide avec epubcheck si `jar` est donné
-/// (c'est la seule étape qui en dépend), puis mesure sa structure.
+impl ControleEpub {
+    /// Échecs cumulés : ceux de la structure d'abord, puis celui d'epubcheck.
+    fn echecs(&self) -> Vec<String> {
+        [self.liens.as_ref().err(), self.sommaire_en_tete.as_ref().err(), self.epubcheck.as_ref().err()]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect()
+    }
+}
+
+/// Lance epubcheck (`java -jar jar`) sur l'EPUB `chemin` : (java appelé, résultat). Les
+/// lignes `ERROR` et `FATAL` (5 au plus) font le message d'échec, à défaut les premières
+/// lignes de la sortie (jar introuvable…).
+fn lancer_epubcheck(jar: &str, chemin: &Path) -> (bool, Result<(), String>) {
+    let sortie = match std::process::Command::new("java").args(["-jar", jar]).arg(chemin).output() {
+        Ok(sortie) => sortie,
+        Err(e) => return (false, Err(format!("epubcheck : java : {e}"))),
+    };
+    if sortie.status.success() {
+        return (true, Ok(()));
+    }
+    let texte = String::from_utf8_lossy(&sortie.stdout).to_string() + &String::from_utf8_lossy(&sortie.stderr);
+    let mut erreurs: Vec<&str> =
+        texte.lines().filter(|l| l.starts_with("ERROR") || l.starts_with("FATAL")).take(5).collect();
+    if erreurs.is_empty() {
+        erreurs = texte.lines().map(str::trim).filter(|l| !l.is_empty()).take(5).collect();
+    }
+    if erreurs.is_empty() {
+        erreurs.push("échec sans message");
+    }
+    (true, Err(format!("epubcheck : {}", erreurs.join(" | "))))
+}
+
+/// Génère l'EPUB dans un dossier temporaire, mesure sa structure, puis le valide avec
+/// epubcheck si `jar` est donné (c'est la seule étape qui en dépend). Seul l'échec de
+/// `generer_epub` est une erreur : les autres sont dans le `ControleEpub`.
 fn controler_epub(jar: Option<&str>, markdown: &str, nom: &str, sommaire_attendu: bool) -> Result<ControleEpub, String> {
     let dossier = tempfile::tempdir().map_err(|e| e.to_string())?;
     let chemin = dossier.path().join("livre.epub");
     generer_epub(markdown, &meta_corpus(nom), None, &chemin).map_err(|e| format!("generer_epub : {e}"))?;
-    if let Some(jar) = jar {
-        let sortie = std::process::Command::new("java")
-            .args(["-jar", jar])
-            .arg(&chemin)
-            .output()
-            .map_err(|e| format!("java : {e}"))?;
-        if !sortie.status.success() {
-            let texte = String::from_utf8_lossy(&sortie.stdout).to_string() + &String::from_utf8_lossy(&sortie.stderr);
-            let erreurs: Vec<&str> =
-                texte.lines().filter(|l| l.starts_with("ERROR") || l.starts_with("FATAL")).take(5).collect();
-            return Err(format!("epubcheck : {}", erreurs.join(" | ")));
-        }
+    let (liens, sommaire_en_tete) = match chapitres_epub(&chemin) {
+        Ok(chapitres) => (Ok(compter_liens(&chapitres)), verifier_sommaire_en_tete(&chapitres, sommaire_attendu)),
+        Err(e) => (Err(format!("lecture de l'EPUB : {e}")), Ok(())),
+    };
+    let (epubcheck_lance, epubcheck) = jar.map_or((false, Ok(())), |jar| lancer_epubcheck(jar, &chemin));
+    Ok(ControleEpub { liens, sommaire_en_tete, epubcheck, epubcheck_lance })
+}
+
+/// Libellé du résumé : « epubcheck lancé » seulement si java a vraiment été appelé.
+fn libelle_epubcheck(controle: &Result<ControleEpub, String>) -> &'static str {
+    match controle {
+        Ok(c) if c.epubcheck_lance => "epubcheck lancé",
+        _ => "epubcheck non lancé",
     }
-    Ok(ControleEpub {
-        liens: liens_de_sommaire(&chemin)?,
-        sommaire_en_tete: verifier_sommaire_en_tete(&chapitres_epub(&chemin)?, sommaire_attendu),
-        epubcheck_lance: jar.is_some(),
-    })
 }
 
 /// Convertit un livre et renvoie la liste de ses attentes non tenues.
@@ -420,22 +461,21 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
     if zones_non_nulles(&reglages) && conversion.retraits.is_empty() {
         echecs.push("aucun retrait malgré des zones non nulles".into());
     }
-    // EPUB toujours généré, structure toujours contrôlée ; seul epubcheck dépend de EPUBCHECK_JAR.
-    // Les liens d'entrée de sommaire sont comparés plus bas aux entrées du Markdown.
+    // EPUB toujours généré, structure toujours contrôlée avant epubcheck, qui seul dépend de
+    // EPUBCHECK_JAR ; leurs échecs sont cumulés. Les liens d'entrée de sommaire sont comparés
+    // plus bas aux entrées du Markdown, même si epubcheck a échoué.
     let jar = std::env::var("EPUBCHECK_JAR").ok();
-    let (liens_epub, epubcheck_lance) =
-        match controler_epub(jar.as_deref(), &conversion.markdown, &entree.fichier, a.sommaire_en_tete == Some(true)) {
-            Ok(controle) => {
-                if let Err(e) = controle.sommaire_en_tete {
-                    echecs.push(e);
-                }
-                (Some(controle.liens), controle.epubcheck_lance)
-            }
-            Err(e) => {
-                echecs.push(e);
-                (None, jar.is_some())
-            }
-        };
+    let controle = controler_epub(jar.as_deref(), &conversion.markdown, &entree.fichier, a.sommaire_en_tete);
+    let liens_epub = match &controle {
+        Ok(c) => {
+            echecs.extend(c.echecs());
+            c.liens.as_ref().ok().copied()
+        }
+        Err(e) => {
+            echecs.push(e.clone());
+            None
+        }
+    };
 
     // Attentes propres au livre.
     let titres = |niveau: usize| -> Vec<&BlocMd> {
@@ -453,7 +493,7 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
         .windows(2)
         .filter(|w| {
             matches!(w[1].genre, Genre::Entree)
-                && ["table des matieres", "sommaire"].contains(&normaliser(&w[0].texte).as_str())
+                && est_titre_de_sommaire(&w[0].texte)
         })
         .map(|w| &w[0])
         .collect();
@@ -566,7 +606,7 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
         longueurs.len(),
         conversion.retraits.len(),
         conversion.points.len(),
-        if epubcheck_lance { "epubcheck lancé" } else { "epubcheck non lancé" },
+        libelle_epubcheck(&controle),
     );
     if let Some(d) = d {
         println!("  DÉROGATION : {}", d.raison);
@@ -647,12 +687,15 @@ mod tests {
         // Le contrôle ne passe plus à vide : un livre qui attend un sommaire à liens
         // échoue s'il n'a aucun chapitre de ce genre.
         let sans_chapitre = [chapitre("chap-001.xhtml", "Livre", ""), chapitre("chap-002.xhtml", "Un chapitre", LIEN)];
+        // « attendu » est propre à l'erreur d'absence (pas à une erreur de position).
         let e = verifier_sommaire_en_tete(&sans_chapitre, true).unwrap_err();
-        assert!(e.contains("chap-002.xhtml") && e.contains("sommaire"), "{e}");
+        assert!(e.contains("attendu") && e.contains("chap-002.xhtml"), "{e}");
         // Un chapitre « Sommaire » sans lien interne n'est pas un sommaire cliquable.
         let sans_lien = [chapitre("chap-001.xhtml", "Livre", ""), chapitre("chap-002.xhtml", "SOMMAIRE", "<p>Un 7</p>")];
-        assert!(verifier_sommaire_en_tete(&sans_lien, true).is_err());
-        assert!(verifier_sommaire_en_tete(&[], true).is_err());
+        let e = verifier_sommaire_en_tete(&sans_lien, true).unwrap_err();
+        assert!(e.contains("attendu"), "{e}");
+        let e = verifier_sommaire_en_tete(&[], true).unwrap_err();
+        assert!(e.contains("attendu"), "{e}");
         // Sans attente, ces mêmes livres passent.
         assert_eq!(verifier_sommaire_en_tete(&sans_chapitre, false), Ok(()));
     }
@@ -664,6 +707,7 @@ mod tests {
             for attendu in [false, true] {
                 let e = verifier_sommaire_en_tete(&tard, attendu).unwrap_err();
                 assert!(e.contains("chap-004.xhtml") && e.contains("chap-002.xhtml"), "{e}");
+                assert!(!e.contains("attendu"), "{e}");
             }
         }
     }
@@ -691,13 +735,43 @@ mod tests {
         );
         let controle = controler_epub(None, &md, "Livre", true).unwrap();
         assert!(!controle.epubcheck_lance);
-        assert_eq!(controle.liens, 1);
+        assert_eq!(controle.liens, Ok(1));
         assert_eq!(controle.sommaire_en_tete, Ok(()));
+        assert_eq!(controle.epubcheck, Ok(()));
+        assert!(controle.echecs().is_empty());
         // Sans chapitre de sommaire, l'attente échoue aussi sans epubcheck.
         let sans = format!("{ANCRE}\n# Livre\n\n{ANCRE}\n# Un\n\n{ANCRE}\nTexte.\n");
         let controle = controler_epub(None, &sans, "Livre", true).unwrap();
         assert!(controle.sommaire_en_tete.is_err());
         assert_eq!(controler_epub(None, &sans, "Livre", false).unwrap().sommaire_en_tete, Ok(()));
+    }
+
+    #[test]
+    fn controle_epub_cumule_structure_et_epubcheck() {
+        // epubcheck échoue (jar introuvable, ou java absent) : la structure est mesurée
+        // quand même, et les deux échecs sont rapportés, structure d'abord.
+        let sans = format!("{ANCRE}\n# Livre\n\n{ANCRE}\n# Un\n\n{ANCRE}\nTexte.\n");
+        let controle = controler_epub(Some("/chemin/absent/epubcheck.jar"), &sans, "Livre", true).unwrap();
+        assert_eq!(controle.liens, Ok(0));
+        assert!(controle.epubcheck.is_err());
+        let echecs = controle.echecs();
+        assert_eq!(echecs.len(), 2, "{echecs:?}");
+        assert!(echecs[0].contains("attendu"), "{echecs:?}");
+        assert!(echecs[1].starts_with("epubcheck : ") && echecs[1].len() > "epubcheck : ".len(), "{echecs:?}");
+    }
+
+    #[test]
+    fn epubcheck_dit_lance_seulement_si_java_a_ete_appele() {
+        // `generer_epub` en échec : epubcheck n'a pas été lancé, même avec un jar.
+        assert_eq!(libelle_epubcheck(&Err("generer_epub : disque plein".into())), "epubcheck non lancé");
+        let controle = |epubcheck_lance| ControleEpub {
+            liens: Ok(0),
+            sommaire_en_tete: Ok(()),
+            epubcheck: Ok(()),
+            epubcheck_lance,
+        };
+        assert_eq!(libelle_epubcheck(&Ok(controle(false))), "epubcheck non lancé");
+        assert_eq!(libelle_epubcheck(&Ok(controle(true))), "epubcheck lancé");
     }
 
     #[test]
