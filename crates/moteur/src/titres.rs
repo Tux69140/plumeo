@@ -8,7 +8,7 @@ use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
-use crate::blocs::{Bloc, Paragraphe};
+use crate::blocs::{Bloc, Paragraphe, Segment};
 use crate::modele::{Ancre, Moitie, Signet};
 use crate::points::{GenrePoint, PointAVerifier};
 use crate::reglages::SourceTitres;
@@ -159,6 +159,21 @@ fn titre_plausible(texte: &str) -> bool {
         let mot = mot.trim_matches(|c: char| !c.is_alphanumeric());
         mot.chars().any(char::is_alphabetic) && mot.chars().any(|c| c.is_ascii_digit()) && !ORDINAL.is_match(mot)
     })
+}
+
+/// Un paragraphe est-il un texte plausible de titre ? Seuls les segments de texte comptent :
+/// les exposants (appels de note, « e » d'un ordinal) sont ignorés, sans quoi
+/// « Introduction » + exposant « 1 » ferait un mot mêlant lettres et chiffres.
+fn paragraphe_titre_plausible(p: &Paragraphe) -> bool {
+    let texte: String = p
+        .segments
+        .iter()
+        .filter_map(|s| match s {
+            Segment::Texte { texte, .. } => Some(texte.as_str()),
+            _ => None,
+        })
+        .collect();
+    titre_plausible(&texte)
 }
 
 /// Pages dont la plupart des paragraphes ressemblent à des lignes de sommaire : ils
@@ -565,7 +580,7 @@ fn titres_par_candidats(
     niveau_1_pris: bool,
 ) -> (Vec<Bloc>, Vec<PointAVerifier>) {
     let est_candidat_brut = |p: &Paragraphe| !pages_som.contains(&p.ancre.page) && candidat(p);
-    let est_candidat = |p: &Paragraphe| est_candidat_brut(p) && titre_plausible(&p.texte_brut());
+    let est_candidat = |p: &Paragraphe| est_candidat_brut(p) && paragraphe_titre_plausible(p);
     let points: Vec<PointAVerifier> = blocs
         .iter()
         .filter_map(|b| match b {
@@ -852,7 +867,7 @@ pub fn detecter_titres(
                     Bloc::Paragraphe(p) => {
                         !pages_som.contains(&p.ancre.page)
                             && candidat_gras_majuscules(p)
-                            && titre_plausible(&p.texte_brut())
+                            && paragraphe_titre_plausible(p)
                     }
                     _ => false,
                 })
@@ -1623,5 +1638,29 @@ mod tests {
         assert_eq!(suspects.len(), 1);
         assert_eq!(suspects[0].message, "ligne illisible non retenue comme titre (OCR ou schéma)");
         assert!(points.iter().all(|p| p.ancre.page != 2));
+    }
+
+    #[test]
+    fn titre_avec_appel_de_note_en_exposant_reste_plausible() {
+        let avec_exposants = |segments: Vec<Segment>| {
+            Bloc::Paragraphe(Paragraphe {
+                segments,
+                ancre: ancre(2),
+                taille: 18.0,
+                tout_gras: false,
+                nb_lignes: 1,
+            })
+        };
+        let texte = |t: &str| Segment::Texte { texte: t.into(), gras: false, italique: false };
+        let blocs = vec![
+            corps(1, &texte_long()),
+            avec_exposants(vec![texte("Introduction"), Segment::Exposant("1".into())]),
+            corps(2, &texte_long()),
+            avec_exposants(vec![texte("2"), Segment::Exposant("e".into()), texte(" partie")]),
+            corps(3, &texte_long()),
+        ];
+        let (blocs, points, _, _) = detecter_titres(blocs, &[], 3, SourceTitres::Taille);
+        assert_eq!(titres(&blocs).len(), 2);
+        assert!(points.iter().all(|p| p.genre != GenrePoint::TitreSuspect));
     }
 }
