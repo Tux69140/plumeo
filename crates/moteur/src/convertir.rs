@@ -144,11 +144,16 @@ pub fn convertir_livre(
         points.iter().filter(|p| p.genre == GenrePoint::Sommaire).map(|p| p.ancre.page).collect();
     // Après le regroupement des notes (qui peut retirer un titre « Notes ») : les
     // identifiants visés par le sommaire sont ceux des titres définitifs. Ses pages
-    // ne se raccordent pas.
+    // ne se raccordent pas. Un seul point par page : celui du sommaire cliquable
+    // remplace « conservée comme texte » d'une page déjà reconnue comme sommaire.
     let (blocs, pts) = sommaire_cliquable(blocs, titre_livre);
     for point in pts {
         if sommaires.insert(point.ancre.page) {
             points.push(point);
+        } else if let Some(ancien) =
+            points.iter_mut().find(|p| p.genre == GenrePoint::Sommaire && p.ancre.page == point.ancre.page)
+        {
+            *ancien = point;
         }
     }
     let blocs = nettoyer_sauts(raccorder_pages(blocs, &vocab, &sommaires, &illisibles));

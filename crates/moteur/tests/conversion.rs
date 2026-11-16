@@ -343,3 +343,32 @@ fn sommaire_imprime_cliquable_jusque_dans_l_epub() {
     assert!(lire("OEBPS/chap-001.xhtml").contains(r#"<h1 id="t-1-le-depart">"#));
     assert!(lire("OEBPS/chap-003.xhtml").contains(r#"<h1 id="t-1-le-depart-2">"#));
 }
+
+#[test]
+fn sommaire_d_origine_aux_entrees_liees_un_seul_point_exact() {
+    // Quatre lignes à numéro final : la page 2 est aussi un sommaire d'origine.
+    let titre = |y: f32, texte: &'static str| t(y, texte, 20.0, StyleFixture::Gras);
+    let p1 = [corps(200.0, "Un avant-propos sans titre qui ouvre le livre.")];
+    let p2 = [
+        corps(100.0, "Table des matieres"),
+        corps(160.0, "1. Le depart .......... 3"),
+        corps(200.0, "2. Le retour .......... 4"),
+        corps(240.0, "3. La fin .......... 5"),
+        corps(280.0, "4. Epilogue .......... 6"),
+    ];
+    let p3 = [titre(100.0, "1 Le depart"), corps(200.0, "Premier paragraphe du chapitre un.")];
+    let p4 = [titre(100.0, "2 Le retour"), corps(200.0, "Premier paragraphe du chapitre deux.")];
+    let p5 = [titre(100.0, "3 La fin"), corps(200.0, "Premier paragraphe du chapitre trois.")];
+    let p6 = [titre(100.0, "4 Epilogue"), corps(200.0, "Premier paragraphe de l'epilogue.")];
+    let pdf = fabriquer_pdf(&[&p1, &p2, &p3, &p4, &p5, &p6]);
+    let doc = DocumentPdf::ouvrir(&pdf).unwrap();
+    let c = convertir_livre(&doc, &reglages(), "", None, &mut |_, _| {}).unwrap();
+    assert!(c.markdown.contains("](#t-4-epilogue)"), "{}", c.markdown);
+    let sommaire: Vec<&str> = c
+        .points
+        .iter()
+        .filter(|p| p.genre == GenrePoint::Sommaire && p.ancre.page == 2)
+        .map(|p| p.message.as_str())
+        .collect();
+    assert_eq!(sommaire, ["la page 2 est un sommaire imprimé : ses entrées renvoient aux titres"]);
+}
