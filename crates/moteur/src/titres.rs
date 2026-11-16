@@ -270,19 +270,22 @@ fn points_de_sommaire(
 /// Signet à chercher dans le corps. `texte_impose` : le titre garde le texte du signet
 /// (numéro et titre fusionnés) au lieu de celui des paragraphes retrouvés, si ceux-ci
 /// le disent exactement ; s'ils disent plus, leur texte est gardé (« I. » en tête).
-/// `numero_avant` (entrées d'un sommaire imprimé) : un paragraphe fait seulement d'un
-/// numéro (`NUMERO_SEUL`), juste avant les paragraphes retrouvés et sur la même
+/// `numero_avant` (entrées d'un sommaire imprimé) : le paragraphe fait seulement d'un
+/// numéro (`numero_seul_avant`), juste avant les paragraphes retrouvés et sur la même
 /// (demi-)page, est absorbé dans le titre (« I » + « LES BASES » → « I. LES BASES »),
-/// qui est alors ancré au numéro.
+/// qui est alors ancré au numéro. `trouve` : paragraphes `debut..fin` déjà retrouvés
+/// (entrées d'un sommaire imprimé, `entrees_du_sommaire`), dans les mêmes blocs ; le
+/// signet n'est alors pas cherché une seconde fois.
 struct SignetCherche {
     signet: Signet,
     texte_impose: bool,
     numero_avant: bool,
+    trouve: Option<(usize, usize)>,
 }
 
 impl From<Signet> for SignetCherche {
     fn from(signet: Signet) -> Self {
-        SignetCherche { signet, texte_impose: false, numero_avant: false }
+        SignetCherche { signet, texte_impose: false, numero_avant: false, trouve: None }
     }
 }
 
@@ -294,10 +297,46 @@ enum Numerotation {
 }
 
 static NUMERO_SEUL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:[IVXLCDM]+|\d+)\.?$").unwrap());
+/// Numéro romain bien formé (« IX », « XIV. », pas « IIX » ni « VX ») ; peut être vide.
+static ROMAIN_BIEN_FORME: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})\.?$").expect("motif valide")
+});
+/// Nombre arabe d'au plus 3 chiffres (« 12 », « 3. ») : « 1984 » n'est pas un numéro.
+static ARABE_COURT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d{1,3}\.?$").expect("motif valide"));
 static NUMEROTE_ARABE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+\.?(?:\s|$)").unwrap());
 static NUMEROTE_ROMAIN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[IVXLCDM]+\.?(?:\s|$)").unwrap());
 /// Numéro en tête d'un texte de titre, suivi ou non d'un point (« I La pierre »).
 static NUMERO_EN_TETE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([IVXLCDM]+|\d+)\.?\s+").unwrap());
+
+/// Valeur d'un texte fait seulement d'un numéro bien formé, suivi ou non d'un point : un
+/// romain non vide (`ROMAIN_BIEN_FORME`) ou un nombre arabe d'au plus 3 chiffres.
+fn numero_seul(texte: &str) -> Option<u32> {
+    if ARABE_COURT.is_match(texte) {
+        return texte.trim_end_matches('.').parse().ok();
+    }
+    let romain = texte.trim_end_matches('.');
+    if romain.is_empty() || !ROMAIN_BIEN_FORME.is_match(texte) {
+        return None;
+    }
+    let chiffre = |c: char| match c {
+        'I' => 1,
+        'V' => 5,
+        'X' => 10,
+        'L' => 50,
+        'C' => 100,
+        'D' => 500,
+        _ => 1000,
+    };
+    let chiffres: Vec<u32> = romain.chars().map(chiffre).collect();
+    // Un chiffre plus petit que le suivant se retranche (« IX » = 10 − 1).
+    Some(
+        chiffres
+            .iter()
+            .enumerate()
+            .map(|(k, &v)| if chiffres.get(k + 1).is_some_and(|&w| w > v) { -(v as i64) } else { v as i64 })
+            .sum::<i64>() as u32,
+    )
+}
 
 fn numerotation(titre: &str) -> Option<Numerotation> {
     let titre = titre.trim();
@@ -333,6 +372,7 @@ fn preparer_signets(signets: &[Signet]) -> Vec<SignetCherche> {
                 signet: Signet { titre, ..s.clone() },
                 texte_impose: true,
                 numero_avant: false,
+                trouve: None,
             });
             i += 2;
         } else {
@@ -369,21 +409,42 @@ fn preparer_signets(signets: &[Signet]) -> Vec<SignetCherche> {
     fusionnes
 }
 
-/// Texte du paragraphe qui précède `debut`, s'il est fait seulement d'un numéro
-/// (`NUMERO_SEUL`), sur la même (demi-)page, et pas déjà pris dans un titre.
-fn numero_seul_avant(blocs: &[Bloc], debut: usize, utilises: &HashSet<usize>) -> Option<String> {
+/// Texte et valeur du paragraphe qui précède `debut`, s'il est fait seulement d'un numéro
+/// bien formé (`numero_seul`), sur la même (demi-)page, et pas déjà pris dans un titre.
+fn numero_seul_avant(blocs: &[Bloc], debut: usize, utilises: &HashSet<usize>) -> Option<(String, u32)> {
     let i = debut.checked_sub(1).filter(|i| !utilises.contains(i))?;
     let Bloc::Paragraphe(p) = &blocs[i] else { return None };
+    if p.ancre.demi_page() != blocs[debut].ancre().demi_page() {
+        return None;
+    }
     let texte = p.texte_brut().trim().to_string();
-    (p.ancre.demi_page() == blocs[debut].ancre().demi_page() && NUMERO_SEUL.is_match(&texte)).then_some(texte)
+    numero_seul(&texte).map(|valeur| (texte, valeur))
 }
 
-/// Titres issus des signets. Retourne les blocs et les points de signets introuvables.
+/// Pour chaque numéro (dans l'ordre des entrées retrouvées), est-il absorbé ? Seule la
+/// suite 1, 2, 3… l'est (romains ou arabes) : une entrée sans numéro ne la casse pas, et
+/// un numéro hors suite (un folio « 12 » resté seul) n'est pas absorbé.
+fn numeros_en_suite(numeros: &[Option<u32>]) -> Vec<bool> {
+    let mut attendu = 1;
+    numeros
+        .iter()
+        .map(|numero| {
+            let dans_la_suite = *numero == Some(attendu);
+            if dans_la_suite {
+                attendu += 1;
+            }
+            dans_la_suite
+        })
+        .collect()
+}
+
+/// Titres issus des signets. Retourne les blocs, les points de signets introuvables et
+/// les indices, dans les blocs rendus, des titres produits (retrouvés ou insérés).
 fn titres_depuis_signets(
     blocs: Vec<Bloc>,
     signets: &[SignetCherche],
     pages_som: &BTreeSet<DemiPage>,
-) -> (Vec<Bloc>, Vec<PointAVerifier>) {
+) -> (Vec<Bloc>, Vec<PointAVerifier>, HashSet<usize>) {
     let mut points = Vec::new();
     // Remplacements : indice de début → (nombre de blocs avalés, titre).
     let mut remplacements: HashMap<usize, (usize, Bloc)> = HashMap::new();
@@ -392,10 +453,22 @@ fn titres_depuis_signets(
     let mut insertions: BTreeMap<usize, Vec<Bloc>> = BTreeMap::new();
     let index = IndexTitres::new(&blocs);
 
-    for SignetCherche { signet, texte_impose, numero_avant } in signets {
+    for SignetCherche { signet, texte_impose, numero_avant, trouve } in signets {
         let niveau = signet.niveau.clamp(1, 3);
         let cible = normaliser_titre(&signet.titre);
-        let trouve = if cible.is_empty() {
+        let trouve = if let Some((debut, fin)) = *trouve {
+            // Correspondance exacte trouvée dans ces mêmes blocs (`entrees_du_sommaire`).
+            let textes: Vec<String> = blocs[debut..fin]
+                .iter()
+                .map(|b| match b {
+                    Bloc::Paragraphe(p) => p.texte_brut().trim().to_string(),
+                    _ => unreachable!("correspondance faite de paragraphes"),
+                })
+                .collect();
+            let texte = textes.join(" ");
+            debug_assert_eq!(normaliser_titre(&texte), cible, "blocs changés depuis la recherche");
+            Some((debut, fin, texte))
+        } else if cible.is_empty() {
             None
         } else {
             let candidats = index.candidats(&cible);
@@ -416,7 +489,7 @@ fn titres_depuis_signets(
                     NUMERO_EN_TETE.replace(&texte, "$1. ").into_owned()
                 };
                 if *numero_avant
-                    && let Some(numero) = numero_seul_avant(&blocs, debut, &utilises)
+                    && let Some((numero, _)) = numero_seul_avant(&blocs, debut, &utilises)
                 {
                     texte = format!("{}. {texte}", numero.trim_end_matches('.'));
                     debut -= 1;
@@ -453,26 +526,33 @@ fn titres_depuis_signets(
     }
 
     let mut resultat = Vec::with_capacity(blocs.len());
+    let mut produits = HashSet::new();
+    let mut inserer = |resultat: &mut Vec<Bloc>, titres: Vec<Bloc>| {
+        for titre in titres {
+            produits.insert(resultat.len());
+            resultat.push(titre);
+        }
+    };
     let mut a_sauter = 0;
     for (i, bloc) in blocs.iter().enumerate() {
         if let Some(titres) = insertions.remove(&i) {
-            resultat.extend(titres);
+            inserer(&mut resultat, titres);
         }
         if a_sauter > 0 {
             a_sauter -= 1;
             continue;
         }
         if let Some((n, titre)) = remplacements.remove(&i) {
-            resultat.push(titre);
+            inserer(&mut resultat, vec![titre]);
             a_sauter = n - 1;
         } else {
             resultat.push(bloc.clone());
         }
     }
     if let Some(titres) = insertions.remove(&blocs.len()) {
-        resultat.extend(titres);
+        inserer(&mut resultat, titres);
     }
-    (resultat, points)
+    (resultat, points, produits)
 }
 
 /// Paragraphes du livre préparés pour retrouver un titre (signet ou entrée de
@@ -486,6 +566,8 @@ struct IndexTitres {
     /// Début (en mots entiers, strictement plus court) du texte normalisé d'un
     /// paragraphe court → paragraphes.
     par_debut: HashMap<String, Vec<usize>>,
+    /// Pages qui portent au moins un paragraphe.
+    pages: HashSet<u32>,
 }
 
 impl IndexTitres {
@@ -494,12 +576,14 @@ impl IndexTitres {
             paragraphes: Vec::with_capacity(blocs.len()),
             par_texte: HashMap::new(),
             par_debut: HashMap::new(),
+            pages: HashSet::new(),
         };
         for (i, bloc) in blocs.iter().enumerate() {
             let Bloc::Paragraphe(p) = bloc else {
                 index.paragraphes.push(None);
                 continue;
             };
+            index.pages.insert(p.ancre.page);
             let texte = p.texte_brut().trim().to_string();
             let norm = normaliser_titre(&texte);
             let mots = nb_mots(&texte);
@@ -596,6 +680,41 @@ fn chercher_signet(
         }
     }
     premier_prefixe
+}
+
+/// Cherche dans le corps une entrée de résumé ou de sommaire (`cible`, texte normalisé)
+/// à partir de la (demi-)page `depart`, hors paragraphes `utilises` et (demi-)pages
+/// `pages_som`. Seuls les candidats (`IndexTitres::candidats`) à partir de `depart`
+/// peuvent aboutir ; les pages qui en portent, et la précédente de chacune, sont essayées
+/// dans l'ordre du livre (`chercher_signet`). `exacte` : seule une correspondance exacte
+/// est retenue.
+///
+/// Ce filtre, appliqué après `chercher_signet`, ne fait pas perdre de correspondance
+/// exacte : `chercher_signet` préfère l'exacte à une correspondance de début sur la page
+/// qu'il examine et la suivante, et ne rend une correspondance de début que s'il n'y a
+/// trouvé aucune exacte. Une correspondance de début écartée laisse donc la recherche
+/// continuer à la page suivante, où une exacte peut encore se trouver.
+fn chercher_entree(
+    blocs: &[Bloc],
+    index: &IndexTitres,
+    cible: &str,
+    depart: DemiPage,
+    utilises: &HashSet<usize>,
+    pages_som: &BTreeSet<DemiPage>,
+    exacte: bool,
+) -> Option<(usize, usize, String)> {
+    let candidats: Vec<usize> =
+        index.candidats(cible).into_iter().filter(|&i| blocs[i].ancre().demi_page() >= depart).collect();
+    let pages: BTreeSet<u32> = candidats
+        .iter()
+        .map(|&i| blocs[i].ancre().page)
+        .flat_map(|page| [page.saturating_sub(1), page])
+        .filter(|page| *page >= depart.0 && index.pages.contains(page))
+        .collect();
+    pages.into_iter().find_map(|page| {
+        chercher_signet(blocs, index, &candidats, cible, page, utilises, pages_som)
+            .filter(|(_, _, texte)| !exacte || normaliser_titre(texte) == cible)
+    })
 }
 
 /// Niveaux des titres d'après leur taille. Les tailles voisines (écart ≤ 0,5 pt, de
@@ -732,11 +851,16 @@ fn est_date(texte: &str) -> bool {
 }
 
 /// Fusionne les titres adjacents de même niveau, même page et même moitié ; une
-/// date n'est jamais collée à un autre titre, ni un titre dont l'ancre est dans
-/// `proteges` (titres tirés d'un sommaire ou d'un résumé, déjà entiers) à son voisin.
-fn fusionner_titres_consecutifs(blocs: Vec<Bloc>, proteges: &HashSet<Ancre>) -> Vec<Bloc> {
+/// date n'est jamais collée à un autre titre, ni un titre dont l'indice dans `blocs` est
+/// dans `proteges` (titres tirés d'un sommaire ou d'un résumé, déjà entiers) à son
+/// voisin. La position, et non l'ancre, désigne le titre protégé : un titre inséré pour
+/// un signet introuvable partage l'ancre du premier bloc de sa page.
+fn fusionner_titres_consecutifs(blocs: Vec<Bloc>, proteges: &HashSet<usize>) -> Vec<Bloc> {
     let mut resultat: Vec<Bloc> = Vec::with_capacity(blocs.len());
-    for bloc in blocs {
+    // Le dernier bloc de `resultat` est-il protégé ? (Un titre fusionné ne l'est jamais.)
+    let mut dernier_protege = false;
+    for (i, bloc) in blocs.into_iter().enumerate() {
+        let protege = proteges.contains(&i);
         if let (
             Bloc::Titre { niveau, texte, ancre },
             Some(Bloc::Titre { niveau: n0, texte: t0, ancre: a0 }),
@@ -747,8 +871,8 @@ fn fusionner_titres_consecutifs(blocs: Vec<Bloc>, proteges: &HashSet<Ancre>) -> 
                 && ancre.moitie == a0.moitie
                 && !est_date(texte)
                 && !est_date(t0)
-                && !proteges.contains(ancre)
-                && !proteges.contains(a0)
+                && !protege
+                && !dernier_protege
             {
                 t0.push(' ');
                 t0.push_str(texte);
@@ -756,6 +880,7 @@ fn fusionner_titres_consecutifs(blocs: Vec<Bloc>, proteges: &HashSet<Ancre>) -> 
             }
         }
         resultat.push(bloc);
+        dernier_protege = protege;
     }
     resultat
 }
@@ -926,18 +1051,8 @@ fn resume_sans_numeros(blocs: &[Bloc], pages_som: &BTreeSet<DemiPage>) -> (BTree
             if cible.is_empty() {
                 continue;
             }
-            // Seules les pages qui portent un candidat (ou dont la suivante en porte
-            // un) peuvent aboutir : elles sont essayées dans l'ordre, comme le livre.
-            let candidats = index.candidats(&cible);
-            let pages: BTreeSet<u32> = candidats
-                .iter()
-                .map(|&i| blocs[i].ancre().page)
-                .flat_map(|page| [page.saturating_sub(1), page])
-                .filter(|page| *page >= depart && par_page.contains_key(page))
-                .collect();
-            let trouve = pages.into_iter().find_map(|page| {
-                chercher_signet(blocs, &index, &candidats, &cible, page, &utilises, pages_som)
-            });
+            // Critère par page : `depart` ouvre sa page entière.
+            let trouve = chercher_entree(blocs, &index, &cible, (depart, Moitie::Entiere), &utilises, pages_som, false);
             if let Some((debut, fin_bloc, _)) = trouve {
                 let page = blocs[debut].ancre().page;
                 utilises.extend(debut..fin_bloc);
@@ -1027,21 +1142,24 @@ fn texte_entree(textes: &[&str]) -> String {
 /// forment un même sommaire, lu dans l'ordre : une entrée part d'un paragraphe et peut
 /// s'étendre aux suivants de la même (demi-)page (`paragraphes_d_entree`, texte
 /// `texte_entree`) ; la plus longue est essayée d'abord, et seule une correspondance
-/// exacte (`chercher_signet`, hors `pages_som`) est retenue. Les paragraphes du sommaire
+/// exacte (`chercher_entree`, hors `pages_som`) est retenue. Les paragraphes du sommaire
 /// d'une entrée retrouvée sont sautés ; une entrée introuvable est ignorée. Un paragraphe
-/// fait seulement d'un numéro (`NUMERO_SEUL` : « IX » seul sur sa ligne) n'ouvre pas
-/// d'entrée et n'est pas cherché : l'entrée suivante absorbera le numéro du corps
-/// (`numero_avant`). Un sommaire de la première moitié du livre est cherché à partir de
-/// la (demi-)page qui suit sa dernière (demi-)page dans l'ordre de lecture (p3d après un
-/// sommaire fini en p3g), un sommaire de fin à partir de la page 1 ; ensuite, chaque
-/// entrée à partir de la page de la précédente retrouvée. Un paragraphe du corps ne sert
-/// qu'une fois. Renvoie, par entrée retrouvée, un pseudo-signet de niveau 1 à sa page et
-/// l'indice de son premier paragraphe retrouvé.
+/// fait seulement d'un numéro bien formé (`numero_seul` : « IX » seul sur sa ligne), qui
+/// ne finit pas par un numéro de page (« DIX 15 » est une entrée), n'ouvre pas d'entrée
+/// et n'est pas cherché : l'entrée suivante absorbera le numéro du corps. Un sommaire de
+/// la première moitié du livre est cherché à partir de la (demi-)page qui suit sa
+/// dernière (demi-)page dans l'ordre de lecture (p3d après un sommaire fini en p3g), un
+/// sommaire de fin à partir de la page 1 ; ensuite, chaque entrée à partir de la page de
+/// la précédente retrouvée. Un paragraphe du corps ne sert qu'une fois.
+/// Renvoie, par entrée retrouvée, un pseudo-signet de niveau 1 à sa page, avec sa
+/// correspondance (`trouve`) dans `blocs`. Le numéro seul qui précède une correspondance
+/// (`numero_seul_avant`) est absorbé (`numero_avant`) s'il est dans la suite 1, 2, 3…
+/// des numéros des entrées retrouvées (`numeros_en_suite`).
 fn entrees_du_sommaire(
     blocs: &[Bloc],
     moities_som: &BTreeSet<DemiPage>,
     pages_som: &BTreeSet<DemiPage>,
-) -> Vec<(Signet, usize)> {
+) -> Vec<SignetCherche> {
     // Sommaires : (première page, dernière (demi-)page, indices des paragraphes).
     let mut sommaires: Vec<(u32, DemiPage, Vec<usize>)> = Vec::new();
     for (i, bloc) in blocs.iter().enumerate() {
@@ -1070,7 +1188,10 @@ fn entrees_du_sommaire(
         while k < paragraphes.len() {
             let suite = paragraphes_d_entree(blocs, paragraphes[k]);
             let textes: Vec<&str> = suite.iter().map(String::as_str).collect();
-            if textes.first().is_some_and(|t| NUMERO_SEUL.is_match(&texte_entree(&[t]))) {
+            let numero_seul_sans_page = |t: &&str| {
+                numero_de_page_final(t.trim()).is_none() && numero_seul(&texte_entree(&[t])).is_some()
+            };
+            if textes.first().is_some_and(numero_seul_sans_page) {
                 k += 1;
                 continue;
             }
@@ -1080,19 +1201,7 @@ fn entrees_du_sommaire(
                 if cible.is_empty() {
                     return None;
                 }
-                // Seuls les candidats à partir de `depart` peuvent aboutir.
-                let candidats: Vec<usize> = index
-                    .candidats(&cible)
-                    .into_iter()
-                    .filter(|&j| blocs[j].ancre().demi_page() >= depart)
-                    .collect();
-                let pages: BTreeSet<u32> = candidats.iter().map(|&j| blocs[j].ancre().page).collect();
-                pages
-                    .into_iter()
-                    .find_map(|page| {
-                        chercher_signet(blocs, &index, &candidats, &cible, page, &utilises, pages_som)
-                            .filter(|(_, _, texte)| normaliser_titre(texte) == cible)
-                    })
+                chercher_entree(blocs, &index, &cible, depart, &utilises, pages_som, true)
                     .map(|(debut, fin_bloc, _)| (n, entree, debut, fin_bloc))
             });
             match trouve {
@@ -1100,14 +1209,28 @@ fn entrees_du_sommaire(
                     let page = blocs[debut].ancre().page;
                     utilises.extend(debut..fin_bloc);
                     depart = (page, Moitie::Entiere);
-                    retrouves.push((Signet { titre: entree, niveau: 1, page }, debut));
+                    retrouves.push((Signet { titre: entree, niveau: 1, page }, debut, fin_bloc));
                     k += n;
                 }
                 None => k += 1,
             }
         }
     }
+    // Numéros seuls avant les correspondances, hors paragraphes déjà retrouvés.
+    let numeros: Vec<Option<u32>> = retrouves
+        .iter()
+        .map(|(_, debut, _)| numero_seul_avant(blocs, *debut, &utilises).map(|(_, valeur)| valeur))
+        .collect();
     retrouves
+        .into_iter()
+        .zip(numeros_en_suite(&numeros))
+        .map(|((signet, debut, fin), numero_avant)| SignetCherche {
+            signet,
+            texte_impose: false,
+            numero_avant,
+            trouve: Some((debut, fin)),
+        })
+        .collect()
 }
 
 /// Détecte les titres selon `source` (ou la cascade en mode `Auto`) et les (demi-)pages
@@ -1175,7 +1298,7 @@ pub fn detecter_titres(
     let mut illisibles = HashSet::new();
     let blocs = match effective {
         SourceTitres::Signets => {
-            let (blocs, manquants) = titres_depuis_signets(blocs, &preparer_signets(signets), &pages_som);
+            let (blocs, manquants, _) = titres_depuis_signets(blocs, &preparer_signets(signets), &pages_som);
             points.extend(manquants);
             blocs
         }
@@ -1192,6 +1315,8 @@ pub fn detecter_titres(
             } else {
                 // Sommaire imprimé : ses entrées font le niveau 1 si au moins 3 d'entre
                 // elles, et au moins la moitié, ne sont pas déjà des titres candidats.
+                // Les correspondances (`trouve`) visent ces `blocs`, déjà privés de leurs
+                // titres courants : ils ne changent plus jusqu'à `titres_depuis_signets`.
                 let entrees = entrees_du_sommaire(&blocs, &moities_som, &pages_som);
                 let deja_candidat = |i: usize| match &blocs[i] {
                     Bloc::Paragraphe(p) => {
@@ -1199,29 +1324,27 @@ pub fn detecter_titres(
                     }
                     _ => false,
                 };
-                let nouvelles = entrees.iter().filter(|(_, i)| !deja_candidat(*i)).count();
-                if nouvelles >= MIN_TITRES_NIVEAU && nouvelles * 2 >= entrees.len() {
-                    entrees
-                        .into_iter()
-                        .map(|(signet, _)| SignetCherche { signet, texte_impose: false, numero_avant: true })
-                        .collect()
-                } else {
-                    Vec::new()
-                }
+                let nouvelles =
+                    entrees.iter().filter(|e| matches!(e.trouve, Some((debut, _)) if !deja_candidat(debut))).count();
+                if nouvelles >= MIN_TITRES_NIVEAU && nouvelles * 2 >= entrees.len() { entrees } else { Vec::new() }
             };
             let niveau_1_pris = !pseudo.is_empty();
             // Titres tirés du sommaire ou du résumé : chacun est déjà entier, aucun n'est
             // fusionné avec son voisin (une partie et le chapitre qui ouvrent la même page).
-            let mut proteges: HashSet<Ancre> = HashSet::new();
+            // Ils sont repérés par leur position dans les blocs, que `titres_par_candidats`
+            // garde (un bloc pour un bloc, dans le même ordre).
+            let mut proteges: HashSet<usize> = HashSet::new();
             let blocs = if niveau_1_pris {
-                let (blocs, manquants) = titres_depuis_signets(blocs, &pseudo, &pages_som);
+                let (blocs, manquants, produits) = titres_depuis_signets(blocs, &pseudo, &pages_som);
                 points.extend(manquants);
-                proteges.extend(blocs.iter().filter(|b| matches!(b, Bloc::Titre { .. })).map(Bloc::ancre));
+                proteges = produits;
                 blocs
             } else {
                 blocs
             };
+            let nb_blocs = blocs.len();
             let (blocs, pts, refuses) = titres_par_candidats(blocs, &pages_som, candidat, niveau_1_pris);
+            debug_assert_eq!(blocs.len(), nb_blocs, "titres_par_candidats garde un bloc pour un bloc");
             points.extend(pts);
             illisibles = refuses;
             fusionner_titres_consecutifs(blocs, &proteges)
@@ -3025,9 +3148,14 @@ mod tests {
     /// paragraphe) en page `page_sommaire` ; sur les autres pages, les lignes de titre
     /// données (numéro puis lignes du titre, de la taille du texte), puis du texte courant.
     fn livre_a_sommaire(page_sommaire: u32, sommaire: &[&str], titres_du_corps: &[(u32, &[&str])]) -> Vec<Bloc> {
+        livre_a_sommaires(&[(page_sommaire, sommaire)], titres_du_corps)
+    }
+
+    /// `livre_a_sommaire`, avec un sommaire réparti sur plusieurs pages (page, lignes).
+    fn livre_a_sommaires(sommaires: &[(u32, &[&str])], titres_du_corps: &[(u32, &[&str])]) -> Vec<Bloc> {
         let mut blocs = Vec::new();
         for page in 1..=20 {
-            if page == page_sommaire {
+            if let Some((_, sommaire)) = sommaires.iter().find(|(p, _)| *p == page) {
                 blocs.extend(sommaire.iter().enumerate().map(|(k, t)| ligne_en(page, 100 + 30 * k as u16, t)));
                 continue;
             }
@@ -3135,9 +3263,9 @@ mod tests {
             "Notes 17",
         ];
         let corps_titres: [(u32, &[&str]); 4] = [
-            (7, &["IX", "LA CULTURE PRATIQUE DE LA PENSEE"]),
-            (10, &["X", "LA CULTURE PRATIQUE DE LA PENSÉE"]),
-            (13, &["XI", "LES BASES DE LA SUITE (I)"]),
+            (7, &["I", "LA CULTURE PRATIQUE DE LA PENSEE"]),
+            (10, &["II", "LA CULTURE PRATIQUE DE LA PENSÉE"]),
+            (13, &["III", "LES BASES DE LA SUITE (I)"]),
             (17, &["Notes"]),
         ];
         let (blocs, _, _, _, _, _) = detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
@@ -3149,9 +3277,9 @@ mod tests {
             })
             .collect();
         let attendu = [
-            ("IX. LA CULTURE PRATIQUE DE LA PENSEE", 7),
-            ("X. LA CULTURE PRATIQUE DE LA PENSÉE", 10),
-            ("XI. LES BASES DE LA SUITE (I)", 13),
+            ("I. LA CULTURE PRATIQUE DE LA PENSEE", 7),
+            ("II. LA CULTURE PRATIQUE DE LA PENSÉE", 10),
+            ("III. LES BASES DE LA SUITE (I)", 13),
             ("Notes", 17),
         ];
         assert_eq!(n1, attendu.map(|(t, p)| (t.to_string(), p)));
@@ -3290,26 +3418,26 @@ mod tests {
 
     #[test]
     fn numero_seul_du_sommaire_absorbe_par_l_entree_suivante() {
-        // La ligne « IX » seule n'est pas une entrée : l'entrée suivante retrouve le titre
+        // La ligne « III » seule n'est pas une entrée : l'entrée suivante retrouve le titre
         // et absorbe le numéro du corps, avec son point.
         let sommaire = [
             "Première conférence, Berlin 7",
             "Les bases de la suite (I)",
             "Deuxième conférence, Berlin 10",
             "Les bases de la suite (II)",
-            "Neuvième conférence, Dornach 13",
-            "IX",
+            "Troisième conférence, Dornach 13",
+            "III",
             "La culture pratique de la pensée.",
-            "Dixième conférence, Dornach 16",
-            "X",
+            "Quatrième conférence, Dornach 16",
+            "IV.",
             "Le système des caté-",
             "gories chez Hegel.",
         ];
         let corps_titres: [(u32, &[&str]); 4] = [
             TITRES_DU_CORPS[0],
             TITRES_DU_CORPS[1],
-            (13, &["IX", "LA CULTURE PRATIQUE DE LA PENSÉE"]),
-            (16, &["X", "LE SYSTÈME DES CATÉGORIES CHEZ HEGEL"]),
+            (13, &["III", "LA CULTURE PRATIQUE DE LA PENSÉE"]),
+            (16, &["IV", "LE SYSTÈME DES CATÉGORIES CHEZ HEGEL"]),
         ];
         let (blocs, _, _, _, _, _) = detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
         let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
@@ -3318,8 +3446,8 @@ mod tests {
             [
                 "I. LES BASES DE LA SUITE (I)",
                 "II. LES BASES DE LA SUITE (II)",
-                "IX. LA CULTURE PRATIQUE DE LA PENSÉE",
-                "X. LE SYSTÈME DES CATÉGORIES CHEZ HEGEL",
+                "III. LA CULTURE PRATIQUE DE LA PENSÉE",
+                "IV. LE SYSTÈME DES CATÉGORIES CHEZ HEGEL",
             ]
         );
     }
@@ -3342,7 +3470,7 @@ mod tests {
         let retrouvees = |blocs: &[Bloc]| -> Vec<String> {
             entrees_du_sommaire(blocs, &moities, &pages)
                 .into_iter()
-                .map(|(s, _)| s.titre)
+                .map(|e| e.signet.titre)
                 .filter(|t| *t != texte_long().trim())
                 .collect()
         };
@@ -3590,5 +3718,264 @@ mod tests {
         assert_eq!(rendu[1..4], ["Imprimé en Suisse", "Un 5", "Deux 7"]);
         assert_eq!(rendu[4], lien("Trois 9", "Trois"));
         assert_eq!(points.iter().map(|p| p.ancre.demi_page()).collect::<Vec<_>>(), [(3, Moitie::Droite)]);
+    }
+
+    #[test]
+    fn numero_seul_bien_forme() {
+        for (texte, valeur) in [
+            ("I", 1),
+            ("IV", 4),
+            ("IX.", 9),
+            ("XIV", 14),
+            ("XL", 40),
+            ("MCMXC", 1990),
+            ("DIX", 509),
+            ("1", 1),
+            ("12.", 12),
+            ("999", 999),
+        ] {
+            assert_eq!(numero_seul(texte), Some(valeur), "{texte}");
+        }
+        for texte in ["", ".", "IIII", "IIX", "VX", "IL", "VV", "1984", "1984.", "I.I", "A", "iv", "12 3"] {
+            assert_eq!(numero_seul(texte), None, "{texte}");
+        }
+    }
+
+    #[test]
+    fn connaissance_de_i_a_x_tous_absorbes() {
+        // Parties sans numéro intercalées entre I…III, IV…VIII et IX, X : elles ne cassent
+        // pas la suite. Les lignes « IX » et « X » seules du sommaire ne sont pas des entrées.
+        let sommaire = [
+            "CONNAISSANCE 3",
+            "Alpha 4",
+            "Beta 5",
+            "Gamma 6",
+            "LOGIQUE 7",
+            "Delta 8",
+            "Epsilon 9",
+            "Zeta 10",
+            "Eta 11",
+            "Theta 12",
+            "PENSÉE PRATIQUE 13",
+            "IX",
+            "Iota 14",
+            "X",
+            "Kappa 15",
+        ];
+        let corps_titres: [(u32, &[&str]); 13] = [
+            (3, &["CONNAISSANCE"]),
+            (4, &["I", "ALPHA"]),
+            (5, &["II", "BETA"]),
+            (6, &["III.", "GAMMA"]),
+            (7, &["LOGIQUE"]),
+            (8, &["IV", "DELTA"]),
+            (9, &["V", "EPSILON"]),
+            (10, &["VI", "ZETA"]),
+            (11, &["VII", "ETA"]),
+            (12, &["VIII", "THETA"]),
+            (13, &["PENSÉE PRATIQUE"]),
+            (14, &["IX", "IOTA"]),
+            (15, &["X", "KAPPA"]),
+        ];
+        let (blocs, _, _, _, _, _) = detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
+        let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
+        assert_eq!(
+            t,
+            [
+                "CONNAISSANCE", "I. ALPHA", "II. BETA", "III. GAMMA", "LOGIQUE", "IV. DELTA", "V. EPSILON", "VI. ZETA",
+                "VII. ETA", "VIII. THETA", "PENSÉE PRATIQUE", "IX. IOTA", "X. KAPPA",
+            ]
+        );
+    }
+
+    #[test]
+    fn folio_isole_hors_suite_pas_absorbe() {
+        // Suite I, II, puis un folio « 12 » resté seul avant le 3e titre : il reste un
+        // paragraphe, et la suite reprend à III.
+        let sommaire = ["Alpha 7", "Beta 9", "Gamma 11", "Delta 13"];
+        let corps_titres: [(u32, &[&str]); 4] = [
+            (7, &["I", "ALPHA"]),
+            (9, &["II", "BETA"]),
+            (11, &["12", "GAMMA"]),
+            (13, &["III", "DELTA"]),
+        ];
+        let (blocs, _, _, _, _, _) = detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
+        let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
+        assert_eq!(t, ["I. ALPHA", "II. BETA", "GAMMA", "III. DELTA"]);
+        let page_11: Vec<String> = blocs.iter().filter(|b| b.ancre().page == 11).map(texte_de).collect();
+        assert_eq!(page_11, ["12", "# GAMMA", texte_long().as_str()]);
+    }
+
+    #[test]
+    fn entree_numero_seul_suivie_d_un_numero_de_page_cherchee() {
+        // « DIX 15 », « 1984 11 », « MIX 17 » finissent par un numéro de page : ce sont de
+        // vraies entrées, cherchées et retrouvées.
+        let sommaire = ["Alpha 5", "Beta 9", "1984 11", "Gamma 13", "DIX 15", "MIX 17"];
+        let corps_titres: [(u32, &[&str]); 6] = [
+            (5, &["ALPHA"]),
+            (9, &["BETA"]),
+            (11, &["1984"]),
+            (13, &["GAMMA"]),
+            (15, &["DIX"]),
+            (17, &["MIX"]),
+        ];
+        let (blocs, _, _, _, _, _) = detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
+        let t: Vec<(u8, String)> = titres(&blocs);
+        assert_eq!(t, ["ALPHA", "BETA", "1984", "GAMMA", "DIX", "MIX"].map(|x| (1, x.to_string())));
+    }
+
+    #[test]
+    fn sommaire_sur_deux_pages_consecutives() {
+        let titres_du_corps: Vec<(u32, &[&str])> = vec![
+            (5, &["ALPHA"]),
+            (6, &["BETA"]),
+            (7, &["GAMMA"]),
+            (8, &["DELTA"]),
+            (9, &["EPSILON"]),
+            (10, &["ZETA"]),
+            (11, &["ETA"]),
+            (12, &["THETA"]),
+        ];
+        let blocs = livre_a_sommaires(
+            &[
+                (2, &["Alpha 5", "Beta 6", "Gamma 7", "Delta 8"]),
+                (3, &["Epsilon 9", "Zeta 10", "Eta 11", "Theta 12"]),
+            ],
+            &titres_du_corps,
+        );
+        let (blocs, _, _, _, _, pages_som) = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
+        assert_eq!(pages_som, BTreeSet::from([(2, Moitie::Entiere), (3, Moitie::Entiere)]));
+        let t: Vec<(u8, String)> = titres(&blocs);
+        assert_eq!(
+            t,
+            ["ALPHA", "BETA", "GAMMA", "DELTA", "EPSILON", "ZETA", "ETA", "THETA"].map(|x| (1, x.to_string()))
+        );
+    }
+
+    #[test]
+    fn numero_seul_sur_une_autre_demi_page_pas_absorbe() {
+        // Page 16 double : « IV » seul en p16g, le titre en p16d. Le numéro n'est pas sur
+        // la (demi-)page du titre : il reste un paragraphe.
+        let mut blocs = livre_a_sommaire(2, &SOMMAIRE_IMPRIME, &TITRES_DU_CORPS);
+        for bloc in blocs.iter_mut() {
+            if let Bloc::Paragraphe(p) = bloc
+                && p.ancre.page == 16
+            {
+                p.ancre.moitie = if p.texte_brut() == "IV" { Moitie::Gauche } else { Moitie::Droite };
+            }
+        }
+        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
+        let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
+        assert_eq!(
+            t,
+            [
+                "I. LES BASES DE LA SUITE (I)",
+                "II. LES BASES DE LA SUITE (II)",
+                "III. JUGEMENTS ANALYTIQUES (LOGIQUE II)",
+                "LE SYSTÈME DES CATÉGORIES CHEZ HEGEL",
+            ]
+        );
+        let page_16: Vec<String> = blocs.iter().filter(|b| b.ancre().page == 16).map(texte_de).collect();
+        assert_eq!(page_16, ["IV", "# LE SYSTÈME DES CATÉGORIES CHEZ HEGEL", texte_long().as_str()]);
+    }
+
+    #[test]
+    fn sommaire_imprime_ignore_avec_des_signets() {
+        // Avec des signets utilisables, les titres viennent des signets : les entrées du
+        // sommaire imprimé n'en donnent pas, et aucun numéro seul n'est absorbé.
+        let signets = [
+            signet("LES BASES DE LA SUITE (I)", 1, 7),
+            signet("LES BASES DE LA SUITE (II)", 1, 10),
+            signet("JUGEMENTS ANALYTIQUES (LOGIQUE II)", 1, 13),
+        ];
+        let blocs = livre_a_sommaire(2, &SOMMAIRE_IMPRIME, &TITRES_DU_CORPS);
+        let (blocs, _, source, _, _, _) = detecter_titres(blocs, &signets, 20, SourceTitres::Auto);
+        assert_eq!(source, SourceTitres::Signets);
+        let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
+        assert_eq!(t, ["LES BASES DE LA SUITE (I)", "LES BASES DE LA SUITE (II)", "JUGEMENTS ANALYTIQUES (LOGIQUE II)"]);
+        assert!(blocs.iter().any(|b| texte_de(b) == "I"));
+        assert!(blocs.iter().any(|b| texte_de(b) == "LE SYSTÈME DES CATÉGORIES CHEZ HEGEL"));
+    }
+
+    #[test]
+    fn sommaire_imprime_ignore_avec_un_resume_par_chapitres() {
+        // Un résumé « CHAPITRE n » (p2) donne le niveau 1 : le sommaire imprimé (p3) n'en
+        // donne pas, et son entrée « Delta » ne devient pas un titre.
+        let mut blocs = vec![
+            corps(1, &texte_long()),
+            ligne_en(2, 100, "CHAPITRE 1: ALPHA"),
+            ligne_en(2, 140, "CHAPITRE 2: BETA"),
+            ligne_en(2, 180, "CHAPITRE 3: GAMMA"),
+        ];
+        blocs.extend(["Alpha 5", "Beta 7", "Gamma 9", "Delta 11"].iter().enumerate().map(|(k, t)| ligne_en(3, 100 + 30 * k as u16, t)));
+        for (page, titre) in [(5, "ALPHA"), (7, "BETA"), (9, "GAMMA"), (11, "DELTA")] {
+            blocs.push(ligne_en(page, 100, titre));
+            blocs.push(corps(page, &texte_long()));
+        }
+        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &[], 11, SourceTitres::Auto);
+        assert_eq!(titres(&blocs), ["ALPHA", "BETA", "GAMMA"].map(|x| (1, x.to_string())));
+        assert!(blocs.iter().any(|b| texte_de(b) == "DELTA"));
+    }
+
+    #[test]
+    fn titre_courant_retire_pas_retrouve_comme_entree() {
+        // « LE LIVRE COURANT », en grand en tête des pages 3 à 20, est un titre courant
+        // retiré : l'entrée « Le livre courant 13 » du sommaire ne le retrouve pas.
+        let sommaire = ["Alpha 5", "Beta 7", "Gamma 9", "Delta 11", "Le livre courant 13"];
+        let corps_titres: [(u32, &[&str]); 4] = [(5, &["ALPHA"]), (7, &["BETA"]), (9, &["GAMMA"]), (11, &["DELTA"])];
+        let mut blocs = Vec::new();
+        for bloc in livre_a_sommaire(2, &sommaire, &corps_titres) {
+            let page = bloc.ancre().page;
+            if page >= 3 && blocs.last().is_none_or(|b: &Bloc| b.ancre().page != page) {
+                blocs.push(para(page, "LE LIVRE COURANT", 18.0, false, 1));
+            }
+            blocs.push(bloc);
+        }
+        let (blocs, _, _, retraits, _, _) = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
+        assert_eq!(retraits.len(), 18);
+        assert_eq!(titres(&blocs), ["ALPHA", "BETA", "GAMMA", "DELTA"].map(|x| (1, x.to_string())));
+    }
+
+    #[test]
+    fn correspondance_transmise_sans_seconde_recherche() {
+        // Deux « ALPHA » sur la page 5 : le titre est pris là où la recherche l'a trouvé
+        // (le second), sans chercher de nouveau.
+        let blocs = vec![
+            corps(4, &texte_long()),
+            para(5, "ALPHA", 12.0, false, 1),
+            corps(5, &texte_long()),
+            para(5, "ALPHA", 12.0, false, 1),
+            corps(5, &texte_long()),
+        ];
+        let cherche =
+            SignetCherche { signet: signet("Alpha", 1, 5), texte_impose: false, numero_avant: false, trouve: Some((3, 4)) };
+        let (blocs, points, titres_produits) = titres_depuis_signets(blocs, &[cherche], &BTreeSet::new());
+        assert!(points.is_empty());
+        assert!(matches!(&blocs[1], Bloc::Paragraphe(_)));
+        assert!(matches!(&blocs[3], Bloc::Titre { niveau: 1, texte, .. } if texte == "ALPHA"));
+        assert_eq!(titres_produits, HashSet::from([3]));
+    }
+
+    #[test]
+    fn titres_proteges_par_position_et_non_par_ancre() {
+        // Un titre inséré pour un signet introuvable prend l'ancre du premier bloc de sa
+        // page : le candidat de cette ancre n'est pas protégé pour autant, et se fusionne
+        // avec son voisin.
+        let a = ancre(5);
+        let blocs = vec![
+            Bloc::Titre { niveau: 1, texte: "PARTIE".into(), ancre: a },
+            Bloc::Titre { niveau: 2, texte: "LE CHAPITRE".into(), ancre: a },
+            Bloc::Titre { niveau: 2, texte: "SANS FIN".into(), ancre: Ancre { rect: [100, 300, 900, 400], ..a } },
+        ];
+        let blocs = fusionner_titres_consecutifs(blocs, &HashSet::from([0]));
+        assert_eq!(titres(&blocs), [(1, "PARTIE".to_string()), (2, "LE CHAPITRE SANS FIN".to_string())]);
+        // Un titre protégé n'est jamais fusionné, ni avant ni après.
+        let blocs = vec![
+            Bloc::Titre { niveau: 2, texte: "UN".into(), ancre: a },
+            Bloc::Titre { niveau: 2, texte: "DEUX".into(), ancre: a },
+            Bloc::Titre { niveau: 2, texte: "TROIS".into(), ancre: a },
+        ];
+        let t = titres(&fusionner_titres_consecutifs(blocs, &HashSet::from([1])));
+        assert_eq!(t, ["UN", "DEUX", "TROIS"].map(|x| (2, x.to_string())));
     }
 }
