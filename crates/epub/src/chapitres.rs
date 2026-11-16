@@ -22,7 +22,13 @@ struct Brouillon {
 
 impl Brouillon {
     fn nouveau(titre: String) -> Self {
-        Brouillon { titre, sous_titres: Vec::new(), evenements: Vec::new(), notes: Vec::new(), significatif: false }
+        Brouillon {
+            titre,
+            sous_titres: Vec::new(),
+            evenements: Vec::new(),
+            notes: Vec::new(),
+            significatif: false,
+        }
     }
 
     /// Fusionne les appels orphelins (corps et notes) avant recensement et rendu.
@@ -46,29 +52,33 @@ fn est_ancre(e: &Event) -> bool {
     matches!(e, Event::Html(h) if h.trim_start().starts_with("<!-- @"))
 }
 
-/// Minuscules, sans accents ni ponctuation, espaces réduits.
+/// Minuscules, sans accents ni ponctuation, ligatures œ et æ dépliées, espaces réduits.
 fn normaliser(s: &str) -> String {
-    let plie: String = s
-        .chars()
-        .flat_map(char::to_lowercase)
-        // Accents combinants (texte décomposé).
-        .filter(|c| !('\u{300}'..='\u{36f}').contains(c))
-        .map(|c| match c {
-            'à' | 'â' | 'ä' | 'á' => 'a',
-            'é' | 'è' | 'ê' | 'ë' => 'e',
-            'î' | 'ï' | 'í' => 'i',
-            'ô' | 'ö' | 'ó' => 'o',
-            'ù' | 'û' | 'ü' | 'ú' => 'u',
-            'ç' => 'c',
-            c if c.is_alphanumeric() => c,
-            _ => ' ',
-        })
-        .collect();
+    let mut plie = String::with_capacity(s.len());
+    // Accents combinants (texte décomposé) retirés.
+    let minuscules = s.chars().flat_map(char::to_lowercase);
+    for c in minuscules.filter(|c| !('\u{300}'..='\u{36f}').contains(c)) {
+        match c {
+            'à' | 'â' | 'ä' | 'á' => plie.push('a'),
+            'é' | 'è' | 'ê' | 'ë' => plie.push('e'),
+            'î' | 'ï' | 'í' => plie.push('i'),
+            'ô' | 'ö' | 'ó' => plie.push('o'),
+            'ù' | 'û' | 'ü' | 'ú' => plie.push('u'),
+            'ÿ' => plie.push('y'),
+            'ç' => plie.push('c'),
+            'œ' => plie.push_str("oe"),
+            'æ' => plie.push_str("ae"),
+            c if c.is_alphanumeric() => plie.push(c),
+            _ => plie.push(' '),
+        }
+    }
     plie.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Titre posé par le moteur sur un sommaire imprimé (`sommaire_cliquable`).
-fn est_titre_de_sommaire(titre: &str) -> bool {
+/// Titre posé par le moteur sur un sommaire imprimé (`sommaire_cliquable`) : « Table des
+/// matières » ou « Sommaire », sans tenir compte de la casse, des accents ni de la
+/// ponctuation (« SOMMAIRE : »). Même décision que le moteur (vérifiée par un test).
+pub fn est_titre_de_sommaire(titre: &str) -> bool {
     matches!(normaliser(titre).as_str(), "table des matieres" | "sommaire")
 }
 
@@ -78,7 +88,8 @@ fn est_lien_vers_titre(e: &Event) -> bool {
 }
 
 /// Fin (exclue) du dernier bloc de premier niveau (paragraphe d'entrée) qui contient
-/// un lien vers un titre.
+/// un lien vers un titre. `None` si et seulement si aucun événement n'est un tel lien :
+/// un lien est toujours dans un bloc de premier niveau, qui se ferme.
 fn fin_des_entrees(evenements: &[Event]) -> Option<usize> {
     let mut profondeur = 0usize;
     let mut avec_lien = false;
@@ -107,17 +118,19 @@ fn fin_des_entrees(evenements: &[Event]) -> Option<usize> {
 /// dernière entrée (colophon…) et ses définitions de notes restent à leur place dans
 /// l'ordre de lecture : à la fin du chapitre qui le précédait.
 fn placer_le_sommaire(chapitres: &mut Vec<Brouillon>) {
-    let Some(s) = chapitres
-        .iter()
-        .position(|c| est_titre_de_sommaire(&c.titre) && c.evenements.iter().any(est_lien_vers_titre))
-    else {
+    // Un chapitre mène à des titres si et seulement si la fin de ses entrées existe.
+    let Some((s, fin)) = chapitres.iter().enumerate().find_map(|(i, c)| {
+        if !est_titre_de_sommaire(&c.titre) {
+            return None;
+        }
+        fin_des_entrees(&c.evenements).map(|fin| (i, fin))
+    }) else {
         return;
     };
     if s < 2 {
         return;
     }
     let mut sommaire = chapitres.remove(s);
-    let fin = fin_des_entrees(&sommaire.evenements).unwrap_or(sommaire.evenements.len());
     let reste = sommaire.evenements.split_off(fin);
     let ids_du_reste: Vec<&str> = reste
         .iter()
@@ -126,8 +139,9 @@ fn placer_le_sommaire(chapitres: &mut Vec<Brouillon>) {
             _ => None,
         })
         .collect();
-    let (partent, restent): (Vec<_>, Vec<_>) =
-        std::mem::take(&mut sommaire.sous_titres).into_iter().partition(|(id, _)| ids_du_reste.contains(&id.as_str()));
+    let (partent, restent): (Vec<_>, Vec<_>) = std::mem::take(&mut sommaire.sous_titres)
+        .into_iter()
+        .partition(|(id, _)| ids_du_reste.contains(&id.as_str()));
     sommaire.sous_titres = restent;
     let precedent = &mut chapitres[s - 1];
     precedent.sous_titres.extend(partent);
@@ -180,7 +194,8 @@ pub fn decouper(markdown: &str, titre_livre: &str) -> Vec<Chapitre> {
                 }
                 courant.significatif = true;
                 dans_titre = Some((level, String::new(), courant.evenements.len()));
-                courant.evenements.push(Event::Start(Tag::Heading { level, id: None, classes, attrs }));
+                let ouverture = Tag::Heading { level, id: None, classes, attrs };
+                courant.evenements.push(Event::Start(ouverture));
             }
             Event::End(TagEnd::Heading(niveau)) => {
                 if let Some((n, texte, position)) = dans_titre.take() {
@@ -188,7 +203,8 @@ pub fn decouper(markdown: &str, titre_livre: &str) -> Vec<Chapitre> {
                     // Identifiant unique dans tout le livre, attribué dans l'ordre du
                     // Markdown (comme le moteur) ; recensé une fois l'ordre final connu.
                     let ancre = ancres.attribuer(&texte);
-                    if let Event::Start(Tag::Heading { id, .. }) = &mut courant.evenements[position] {
+                    let ouverture = &mut courant.evenements[position];
+                    if let Event::Start(Tag::Heading { id, .. }) = ouverture {
                         *id = Some(CowStr::from(ancre.clone()));
                     }
                     if n == HeadingLevel::H1 {
@@ -207,7 +223,10 @@ pub fn decouper(markdown: &str, titre_livre: &str) -> Vec<Chapitre> {
                 }
                 if !matches!(
                     &e,
-                    Event::SoftBreak | Event::HardBreak | Event::Start(Tag::HtmlBlock) | Event::End(TagEnd::HtmlBlock)
+                    Event::SoftBreak
+                        | Event::HardBreak
+                        | Event::Start(Tag::HtmlBlock)
+                        | Event::End(TagEnd::HtmlBlock)
                 )
                     && !matches!(&e, Event::Text(t) if t.trim().is_empty())
                 {
@@ -231,4 +250,23 @@ pub fn decouper(markdown: &str, titre_livre: &str) -> Vec<Chapitre> {
         renvois.recenser(i, &c.evenements, &c.notes);
     }
     chapitres.into_iter().enumerate().map(|(i, c)| c.finir(i, titre_livre, &mut renvois)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normaliser_replie_accents_et_ligatures() {
+        assert_eq!(
+            normaliser("À Â Ä É È Ê Ë Î Ï Ô Ö Ù Û Ü Ÿ Ç Œ Æ"),
+            "a a a e e e e i i o o u u u y c oe ae"
+        );
+        assert_eq!(
+            normaliser("à â ä é è ê ë î ï ô ö ù û ü ÿ ç œ æ"),
+            "a a a e e e e i i o o u u u y c oe ae"
+        );
+        // Texte décomposé (NFD) : accents combinants retirés.
+        assert_eq!(normaliser("Matie\u{300}res : sœur"), "matieres soeur");
+    }
 }

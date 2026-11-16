@@ -1483,9 +1483,16 @@ static NUMERO_FINAL: LazyLock<Regex> = LazyLock::new(|| {
 /// Titres d'un sommaire imprimé (paragraphe placé juste avant la première entrée).
 const TITRES_DE_SOMMAIRE: [&str; 2] = ["table des matieres", "sommaire"];
 
+/// Le texte est-il « Table des matières » ou « Sommaire » (casse, accents et
+/// ponctuation ignorés) ? Même décision que `plumeo_epub::est_titre_de_sommaire`,
+/// vérifiée par un test.
+fn est_titre_de_sommaire(texte: &str) -> bool {
+    TITRES_DE_SOMMAIRE.contains(&normaliser(texte).as_str())
+}
+
 /// Le bloc est-il un paragraphe « Table des matières » ou « Sommaire » ?
 fn titre_de_sommaire(bloc: &Bloc) -> bool {
-    matches!(bloc, Bloc::Paragraphe(p) if TITRES_DE_SOMMAIRE.contains(&normaliser(&p.texte_brut()).as_str()))
+    matches!(bloc, Bloc::Paragraphe(p) if est_titre_de_sommaire(&p.texte_brut()))
 }
 
 /// Titre qu'une entrée de sommaire peut viser : indice de son bloc et sa (demi-)page.
@@ -2534,6 +2541,23 @@ mod tests {
     #[test]
     fn normaliser_retire_diacritiques_et_ponctuation() {
         assert_eq!(normaliser("  L’Âme,  d'été! "), "l ame d ete");
+    }
+
+    #[test]
+    fn titre_de_sommaire_identique_dans_le_moteur_et_l_epub() {
+        for (texte, attendu) in [
+            ("Table des matières", true),
+            ("TABLE DES MATIÈRES", true),
+            ("Table des Matieres", true),
+            ("Sommaire", true),
+            ("SOMMAIRE", true),
+            ("Sommaire :", true),
+            ("Table", false),
+            ("Sommaires et index", false),
+        ] {
+            assert_eq!(est_titre_de_sommaire(texte), attendu, "moteur : « {texte} »");
+            assert_eq!(plumeo_epub::est_titre_de_sommaire(texte), attendu, "EPUB : « {texte} »");
+        }
     }
 
     #[test]

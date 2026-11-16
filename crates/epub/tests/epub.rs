@@ -413,3 +413,53 @@ fn sous_titre_apres_le_sommaire_reste_en_place() {
     let nav = texte(&e, "OEBPS/nav.xhtml");
     assert!(nav.contains(r##"<a href="chap-003.xhtml#t-achevé-d-imprimer">Achevé d'imprimer</a>"##), "{nav}");
 }
+
+#[test]
+fn est_titre_de_sommaire_public() {
+    let oui = ["Table des matières", "TABLE DES MATIÈRES", "Table des Matieres", "Sommaire", "SOMMAIRE"];
+    for oui in oui.into_iter().chain(["Sommaire :", "Tâble dès mätïères"]) {
+        assert!(plumeo_epub::est_titre_de_sommaire(oui), "« {oui} »");
+    }
+    for non in ["Table", "Sommaires et index", ""] {
+        assert!(!plumeo_epub::est_titre_de_sommaire(non), "« {non} »");
+    }
+}
+
+#[test]
+fn deux_sommaires_a_liens_seul_le_premier_est_deplace() {
+    let md = "# Livre\n\nx\n\n# Ch 1\n\ny\n\n# Sommaire\n\n[Ch 1](#t-ch-1)\n\n# Ch 2\n\nz\n\n\
+              # Sommaire\n\n[Ch 2](#t-ch-2)\n";
+    let (_d, c) = fabriquer(md, None);
+    let e = entrees(&c);
+    assert_eq!(titres_des_chapitres(&e), ["Livre", "Sommaire", "Ch 1", "Ch 2", "Sommaire"]);
+    let premier = texte(&e, "OEBPS/chap-002.xhtml");
+    assert!(premier.contains(r#"<a href="chap-003.xhtml#t-ch-1">Ch 1</a>"#), "{premier}");
+    let second = texte(&e, "OEBPS/chap-005.xhtml");
+    assert!(second.contains(r#"<a href="chap-004.xhtml#t-ch-2">Ch 2</a>"#), "{second}");
+}
+
+#[test]
+fn sommaire_en_position_0_ne_bouge_pas() {
+    let md = "# Sommaire\n\n[Ch 1](#t-ch-1)\n\napres les entrees\n\n# Ch 1\n\ny\n\n# Ch 2\n\nz\n";
+    let (_d, c) = fabriquer(md, None);
+    let e = entrees(&c);
+    assert_eq!(titres_des_chapitres(&e), ["Sommaire", "Ch 1", "Ch 2"]);
+    let table = texte(&e, "OEBPS/chap-001.xhtml");
+    assert!(table.contains("<p>apres les entrees</p>"), "{table}");
+    assert!(table.contains(r#"<a href="chap-002.xhtml#t-ch-1">Ch 1</a>"#), "{table}");
+}
+
+#[test]
+fn sommaire_sans_suite_laisse_le_chapitre_precedent_inchange() {
+    // Rien après la dernière entrée : le chapitre précédent ne reçoit rien. Le livre
+    // est le même que si le sommaire avait été écrit à sa place.
+    let deplace = "# Livre\n\nx\n\n# Ch 1\n\ny\n\n## Sous\n\nw\n\n# Sommaire\n\n[Ch 1](#t-ch-1)\n";
+    let en_place = "# Livre\n\nx\n\n# Sommaire\n\n[Ch 1](#t-ch-1)\n\n# Ch 1\n\ny\n\n## Sous\n\nw\n";
+    let (_d1, c1) = fabriquer(deplace, None);
+    let (_d2, c2) = fabriquer(en_place, None);
+    let (e1, e2) = (entrees(&c1), entrees(&c2));
+    assert_eq!(titres_des_chapitres(&e1), ["Livre", "Sommaire", "Ch 1"]);
+    for nom in ["OEBPS/chap-001.xhtml", "OEBPS/chap-002.xhtml", "OEBPS/chap-003.xhtml", "OEBPS/nav.xhtml"] {
+        assert_eq!(texte(&e1, nom), texte(&e2, nom), "{nom}");
+    }
+}
