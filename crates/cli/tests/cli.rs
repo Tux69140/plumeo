@@ -97,3 +97,22 @@ fn cli_nettoie_titre_et_auteur() {
     assert!(opf.contains("<dc:title>Mon titre</dc:title>"), "{opf}");
     assert!(opf.contains("<dc:creator>Ada Auteur</dc:creator>"), "{opf}");
 }
+
+#[test]
+fn cli_avertit_avant_d_ecraser() {
+    let (dossier, pdf, serie) = preparer();
+    let sortie = dossier.path().join("sortie");
+    let lancer = || {
+        Command::new(env!("CARGO_BIN_EXE_plumeo-cli"))
+            .arg("convertir").arg(&pdf)
+            .arg("--serie").arg(&serie)
+            .arg("--sortie").arg(&sortie)
+            .output().unwrap()
+    };
+    let premier = lancer();
+    assert!(!String::from_utf8_lossy(&premier.stderr).contains("remplacé"));
+    let second = lancer();
+    assert!(second.status.success());
+    let err = String::from_utf8_lossy(&second.stderr);
+    assert!(err.contains("Mon petit livre - Jean Dupont.epub existe déjà : remplacé"), "{err}");
+}

@@ -127,6 +127,9 @@ fn convertir(
     std::fs::create_dir_all(sortie)?;
     let base = nom_sortie(&titre, &auteur);
     let fichier = |ext: &str| sortie.join(format!("{base}.{ext}"));
+    if fichier("epub").exists() {
+        eprintln!("attention : {base}.epub existe déjà : remplacé");
+    }
     generer_epub(&conversion.markdown, &meta, Some(&couverture), &fichier("epub"))?;
     std::fs::write(fichier("md"), &conversion.markdown)?;
     std::fs::write(fichier("retraits.json"), serde_json::to_string_pretty(&conversion.retraits)?)?;
