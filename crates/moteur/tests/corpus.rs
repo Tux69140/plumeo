@@ -637,7 +637,12 @@ mod tests {
         let dossier = tempfile::tempdir().unwrap();
         let chemin = dossier.path().join("livre.epub");
         generer_epub(&md, &meta_corpus("Livre"), None, &chemin).unwrap();
-        assert_eq!(verifier_sommaire_en_tete(&chapitres_epub(&chemin).unwrap()), Ok(()));
+        let chapitres = chapitres_epub(&chemin).unwrap();
+        // Le chapitre du sommaire est bien trouvé, en chap-002 : sans lui, le contrôle
+        // passerait à vide.
+        let (_, chap_2) = chapitres.iter().find(|(nom, _)| nom == "chap-002.xhtml").expect("chap-002.xhtml");
+        assert!(chap_2.contains("Table des matières</h1>") && chap_2.contains("#t-un\""), "{chap_2}");
+        assert_eq!(verifier_sommaire_en_tete(&chapitres), Ok(()));
     }
 
     #[test]

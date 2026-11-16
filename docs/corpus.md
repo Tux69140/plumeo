@@ -145,9 +145,15 @@ visuel), puis lot « sommaires imprimés » (plan 2).
 
 ### Attentes ajoutées par le lot « sommaires imprimés » (n° 3 et 6)
 
-Mesurées au passage du corpus, puis figées. Chacune échoue sur l'état précédent
-(`02bf46c`, essai fait avec le nouveau manifeste) : 0 entrée de sommaire aux n° 3 et 6,
-0 titre n1 au n° 6, numéros romains seuls aux p. 13d à 76g.
+Mesurées au passage du corpus, puis figées. Les attentes du manifeste (n° 3 et 6)
+échouent chacune sur l'état précédent (`02bf46c`, essai fait avec le nouveau manifeste) :
+0 entrée de sommaire aux n° 3 et 6, 0 titre n1 au n° 6, numéros romains seuls aux
+p. 13d à 76g. Le contrôle « sommaire en chap-002 », lui, passait aussi sur l'ancien
+état : aucun chapitre de sommaire à liens n'y était hors de la 2e position (Alchimie
+n'avait pas encore de sommaire lié). Il est prouvé par les tests unitaires
+(`sommaire_en_tete_refuse_ailleurs_qu_en_position_2`, et
+`sommaire_imprime_a_la_fin_remonte_en_position_2`, qui vérifie aussi que le chapitre du
+sommaire est bien trouvé en `chap-002.xhtml`), pas par le corpus de l'ancien état.
 
 - **n° 3, `entrees_sommaire: 11`.** Le sommaire de la p. 205 (lignes à points de conduite
   pleine largeur) n'était pas reconnu : 3 paragraphes, dernière entrée recollée au
