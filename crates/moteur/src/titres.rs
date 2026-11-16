@@ -2,6 +2,7 @@
 //! et des pages de sommaire d'origine.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::ops::Range;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -1464,196 +1465,295 @@ fn titre_de_sommaire(bloc: &Bloc) -> bool {
     matches!(bloc, Bloc::Paragraphe(p) if TITRES_DE_SOMMAIRE.contains(&normaliser(&p.texte_brut()).as_str()))
 }
 
-/// Sommaire imprimé rendu cliquable. Une entrée est faite de 1 à 3 paragraphes
-/// consécutifs d'une même (demi-)page (`paragraphes_d_entree`, texte joint `texte_entree` :
-/// césure recollée, sans le numéro de page final ni les points de conduite) qui portent
-/// le texte d'un titre situé sur une autre page (`normaliser_titre`), ou ce texte sans son
-/// numéro en tête (`NUMERO_EN_TETE` : « Les bases » vise « I. LES BASES ») ; l'entrée la
-/// plus longue qui vise un titre après sa page l'emporte, à défaut la plus longue qui en
-/// vise un. Une (demi-)page de sommaire est une (demi-)page qui porte au moins 3 entrées
-/// et dont au moins la moitié des paragraphes sont couverts par des entrées (un faux-titre
-/// de 3 lignes, une seule entrée, n'en est pas une) ; la (demi-)page qui suit
-/// directement une (demi-)page de sommaire en est aussi une si tous ses paragraphes le
-/// sont, et celle qui la précède directement (dans l'ordre de lecture : p3g avant p3d)
-/// aussi, si elle porte au moins une entrée et si tous ses paragraphes sont dans des
-/// entrées, sauf un éventuel titre « Table des matières » ou « Sommaire » placé avant
-/// la première. Le titre visé est le premier de ce texte après la page de l'entrée, à défaut le
-/// premier du livre, en sautant les titres déjà visés par une entrée précédente tant
-/// qu'il en reste un libre (titres homonymes visés dans l'ordre) ; le titre du livre
-/// (premier titre de niveau 1, s'il porte `titre_livre`) n'est jamais visé. Sur ces
-/// (demi-)pages, chaque entrée (sans appel de note) devient une seule `EntreeSommaire`
-/// (cible : identifiant du titre, voir `markdown::ancre_titre`) qui garde tout le texte de
-/// ses paragraphes, joints par une espace ou recollés sur une césure, ancrée au premier,
-/// rectangle étendu aux autres ; le paragraphe « Table des matières » ou « Sommaire »
-/// placé juste avant la première entrée d'une suite de (demi-)pages de sommaire (notes et
-/// sauts passés), s'il n'est pas lui-même dans une entrée, devient un titre de niveau 1.
-/// Renvoie aussi un point `Sommaire` par page qui contient un sommaire, ancré à sa
-/// première (demi-)page de sommaire, et les (demi-)pages de sommaire.
-pub fn sommaire_cliquable(
-    mut blocs: Vec<Bloc>,
-    titre_livre: &str,
-) -> (Vec<Bloc>, Vec<PointAVerifier>, BTreeSet<DemiPage>) {
-    let titre_livre = normaliser_titre(titre_livre.trim());
-    let livre = blocs.iter().position(|b| matches!(b, Bloc::Titre { niveau: 1, .. })).filter(|&i| match &blocs[i] {
-        Bloc::Titre { texte, .. } => !titre_livre.is_empty() && normaliser_titre(texte) == titre_livre,
-        _ => false,
-    });
-    // Texte normalisé → (indice, (demi-)page) des titres qui le portent, dans l'ordre du
-    // livre ; `sans_numero` : de même pour le texte des titres numérotés, sans le numéro
-    // en tête.
-    let mut titres: HashMap<String, Vec<(usize, DemiPage)>> = HashMap::new();
-    let mut sans_numero: HashMap<String, Vec<(usize, DemiPage)>> = HashMap::new();
-    for (i, bloc) in blocs.iter().enumerate() {
-        if let Bloc::Titre { texte, ancre, .. } = bloc
-            && Some(i) != livre
-        {
-            let texte = texte.trim();
-            let norm = normaliser_titre(texte);
-            if !norm.is_empty() {
-                titres.entry(norm).or_default().push((i, ancre.demi_page()));
-            }
-            let court = NUMERO_EN_TETE.replace(texte, "");
-            let norm = normaliser_titre(&court);
-            if court.len() < texte.len() && !norm.is_empty() {
-                sans_numero.entry(norm).or_default().push((i, ancre.demi_page()));
+/// Titre qu'une entrée de sommaire peut viser : indice de son bloc et sa (demi-)page.
+#[derive(Clone, Copy)]
+struct TitreCible {
+    indice: usize,
+    lieu: DemiPage,
+}
+
+/// Titres que peuvent viser les entrées d'un sommaire imprimé (tous, sauf le titre du
+/// livre), par texte normalisé (`normaliser_titre`) et dans l'ordre du livre ;
+/// `sans_numero` : de même pour le texte des titres numérotés, sans le numéro en tête.
+struct TitresCibles {
+    par_texte: HashMap<String, Vec<TitreCible>>,
+    sans_numero: HashMap<String, Vec<TitreCible>>,
+}
+
+impl TitresCibles {
+    /// Index des titres de `blocs`. Le titre du livre est le premier titre de niveau 1,
+    /// s'il porte `titre_livre`.
+    fn new(blocs: &[Bloc], titre_livre: &str) -> Self {
+        let titre_livre = normaliser_titre(titre_livre.trim());
+        let livre = blocs.iter().position(|b| matches!(b, Bloc::Titre { niveau: 1, .. })).filter(|&i| match &blocs[i] {
+            Bloc::Titre { texte, .. } => !titre_livre.is_empty() && normaliser_titre(texte) == titre_livre,
+            _ => false,
+        });
+        let mut cibles = TitresCibles { par_texte: HashMap::new(), sans_numero: HashMap::new() };
+        for (indice, bloc) in blocs.iter().enumerate() {
+            if let Bloc::Titre { texte, ancre, .. } = bloc
+                && Some(indice) != livre
+            {
+                let cible = TitreCible { indice, lieu: ancre.demi_page() };
+                let texte = texte.trim();
+                let norm = normaliser_titre(texte);
+                if !norm.is_empty() {
+                    cibles.par_texte.entry(norm).or_default().push(cible);
+                }
+                let court = NUMERO_EN_TETE.replace(texte, "");
+                let norm = normaliser_titre(&court);
+                if court.len() < texte.len() && !norm.is_empty() {
+                    cibles.sans_numero.entry(norm).or_default().push(cible);
+                }
             }
         }
+        cibles
     }
-    // Titres (hors de la (demi-)page `demi_page`) que vise une entrée faite des paragraphes
-    // `textes` : son texte brut (entrée d'un seul paragraphe), puis son texte joint ; le
-    // texte entier des titres d'abord, puis leur texte sans numéro en tête. Vide si aucun.
-    let vises = |textes: &[&str], demi_page: DemiPage| -> Vec<(usize, DemiPage)> {
+
+    /// Titres (hors de la (demi-)page `lieu`) que vise une entrée faite des paragraphes
+    /// `textes` : son texte brut (entrée d'un seul paragraphe), puis son texte joint
+    /// (`texte_entree`) ; le texte entier des titres d'abord, puis leur texte sans numéro
+    /// en tête. Vide si aucun.
+    fn vises(&self, textes: &[&str], lieu: DemiPage) -> Vec<TitreCible> {
         let joint = texte_entree(textes);
         let brut = if textes.len() == 1 { Some(textes[0].trim()) } else { None };
         for t in brut.into_iter().chain([joint.as_str()]) {
             let norm = normaliser_titre(t);
-            for table in [&titres, &sans_numero] {
-                let autres: Vec<(usize, DemiPage)> =
-                    table.get(&norm).into_iter().flatten().copied().filter(|(_, d)| *d != demi_page).collect();
+            for table in [&self.par_texte, &self.sans_numero] {
+                let autres: Vec<TitreCible> =
+                    table.get(&norm).into_iter().flatten().copied().filter(|c| c.lieu != lieu).collect();
                 if !autres.is_empty() {
                     return autres;
                 }
             }
         }
         Vec::new()
-    };
+    }
+}
 
-    // (Demi-)pages dans l'ordre du livre : (demi-)page, indices des paragraphes, et entrées
-    // (indice du premier paragraphe, nombre de paragraphes, titres visés). Une entrée ne
-    // déborde jamais de sa (demi-)page.
+/// Entrée reconnue sur une (demi-)page : paragraphes consécutifs `couverts` (indices dans
+/// les blocs, jamais à cheval sur deux (demi-)pages) et titres qu'elle peut viser, dans
+/// l'ordre du livre.
+struct EntreeReconnue {
+    couverts: Range<usize>,
+    cibles: Vec<TitreCible>,
+}
+
+/// (Demi-)page du livre lue par `reconnaitre_sommaires` : ses paragraphes (indices dans
+/// les blocs), ses entrées reconnues, et si c'est une (demi-)page de sommaire.
+struct PageLue {
+    lieu: DemiPage,
+    paragraphes: Vec<usize>,
+    entrees: Vec<EntreeReconnue>,
+    sommaire: bool,
+}
+
+impl PageLue {
+    /// Nombre de paragraphes couverts par des entrées.
+    fn nb_couverts(&self) -> usize {
+        self.entrees.iter().map(|e| e.couverts.len()).sum()
+    }
+
+    /// La (demi-)page s'ouvre-t-elle sur le titre du sommaire (« Table des matières » ou
+    /// « Sommaire » avant sa première entrée) ?
+    fn ouvre_le_sommaire(&self, blocs: &[Bloc]) -> bool {
+        self.entrees.first().is_some_and(|premiere| {
+            self.paragraphes.iter().any(|&j| j < premiere.couverts.start && titre_de_sommaire(&blocs[j]))
+        })
+    }
+}
+
+/// Entrée d'un sommaire imprimé liée à son titre : paragraphes couverts et indice du
+/// titre visé.
+struct EntreeLiee {
+    couverts: Range<usize>,
+    titre: usize,
+}
+
+/// Sommaires imprimés reconnus par `reconnaitre_sommaires` : entrées liées (dans l'ordre
+/// des blocs), paragraphes « Table des matières » ou « Sommaire » qui deviennent des
+/// titres, et (demi-)pages de sommaire.
+struct SommairesReconnus {
+    entrees: Vec<EntreeLiee>,
+    titres_de_sommaire: Vec<usize>,
+    pages: BTreeSet<DemiPage>,
+}
+
+/// Entrées reconnues sur la (demi-)page `lieu`, faite des `paragraphes`. Une entrée part
+/// d'un paragraphe et couvre ceux que permet `paragraphes_d_entree` ; la plus longue qui
+/// vise un titre après la (demi-)page l'emporte, à défaut la plus longue qui en vise un.
+/// Les paragraphes qu'elle couvre ne sont pas essayés comme début d'une autre.
+fn entrees_de_la_page(blocs: &[Bloc], cibles: &TitresCibles, lieu: DemiPage, paragraphes: &[usize]) -> Vec<EntreeReconnue> {
+    let mut entrees = Vec::new();
+    let mut k = 0;
+    while k < paragraphes.len() {
+        let suite = paragraphes_d_entree(blocs, paragraphes[k]);
+        let textes: Vec<&str> = suite.iter().map(String::as_str).collect();
+        let essais: Vec<(usize, Vec<TitreCible>)> =
+            (1..=textes.len()).rev().map(|n| (n, cibles.vises(&textes[..n], lieu))).collect();
+        let trouve = essais
+            .iter()
+            .find(|(_, vises)| vises.iter().any(|c| c.lieu > lieu))
+            .or_else(|| essais.iter().find(|(_, vises)| !vises.is_empty()));
+        match trouve {
+            Some((n, vises)) => {
+                let debut = paragraphes[k];
+                entrees.push(EntreeReconnue { couverts: debut..debut + n, cibles: vises.clone() });
+                k += n;
+            }
+            None => k += 1,
+        }
+    }
+    entrees
+}
+
+/// (Demi-)pages du livre qui portent au moins un paragraphe, dans l'ordre du livre, avec
+/// leurs entrées reconnues (pas encore marquées comme pages de sommaire).
+fn lire_pages(blocs: &[Bloc], cibles: &TitresCibles) -> Vec<PageLue> {
     let mut rang: HashMap<DemiPage, usize> = HashMap::new();
-    let mut moities: Vec<(DemiPage, Vec<usize>, Vec<(usize, usize, Vec<(usize, DemiPage)>)>)> = Vec::new();
+    let mut pages: Vec<PageLue> = Vec::new();
     for (i, bloc) in blocs.iter().enumerate() {
         if let Bloc::Paragraphe(p) = bloc {
-            let r = *rang.entry(p.ancre.demi_page()).or_insert_with(|| {
-                moities.push((p.ancre.demi_page(), Vec::new(), Vec::new()));
-                moities.len() - 1
+            let lieu = p.ancre.demi_page();
+            let r = *rang.entry(lieu).or_insert_with(|| {
+                pages.push(PageLue { lieu, paragraphes: Vec::new(), entrees: Vec::new(), sommaire: false });
+                pages.len() - 1
             });
-            moities[r].1.push(i);
+            pages[r].paragraphes.push(i);
         }
     }
-    for &mut (demi_page, ref paragraphes, ref mut entrees) in &mut moities {
-        let mut k = 0;
-        while k < paragraphes.len() {
-            // Paragraphes consécutifs de la (demi-)page, sans appel de note (un lien ne
-            // peut pas en contenir), à partir du k-ième.
-            let suite = paragraphes_d_entree(&blocs, paragraphes[k]);
-            let textes: Vec<&str> = suite.iter().map(String::as_str).collect();
-            // La plus longue qui vise un titre après la (demi-)page, à défaut la plus
-            // longue qui en vise un.
-            let essais: Vec<(usize, Vec<(usize, DemiPage)>)> =
-                (1..=textes.len()).rev().map(|n| (n, vises(&textes[..n], demi_page))).collect();
-            let trouve = essais
-                .iter()
-                .find(|(_, titres)| titres.iter().any(|(_, d)| *d > demi_page))
-                .or_else(|| essais.iter().find(|(_, titres)| !titres.is_empty()))
-                .cloned();
-            match trouve {
-                Some((n, titres)) => {
-                    entrees.push((paragraphes[k], n, titres));
-                    k += n;
-                }
-                None => k += 1,
-            }
-        }
+    for page in &mut pages {
+        page.entrees = entrees_de_la_page(blocs, cibles, page.lieu, &page.paragraphes);
     }
-    // (Demi-)pages de sommaire, et début de chaque suite de (demi-)pages de sommaire. La
-    // (demi-)page de rang `b` suit directement celle de rang `a` (rangs consécutifs) si
-    // elle est sur la même page ou la suivante.
-    let contigues = |a: usize, b: usize| moities[b].0.0 <= moities[a].0.0 + 1;
-    let mut sommaire = vec![false; moities.len()];
-    for (r, (_, paragraphes, entrees)) in moities.iter().enumerate() {
-        let couverts: usize = entrees.iter().map(|(_, n, _)| n).sum();
-        let suite = r.checked_sub(1).is_some_and(|a| sommaire[a] && contigues(a, r));
-        sommaire[r] = (entrees.len() >= MIN_TITRES_NIVEAU && couverts * 2 >= paragraphes.len())
-            || (suite && couverts == paragraphes.len());
+    pages
+}
+
+/// La (demi-)page de rang `b` suit-elle directement celle de rang `a` (rangs consécutifs) :
+/// même page ou page suivante ?
+fn contigues(pages: &[PageLue], a: usize, b: usize) -> bool {
+    pages[b].lieu.0 <= pages[a].lieu.0 + 1
+}
+
+/// Marque les (demi-)pages de sommaire. Critère principal : au moins 3 entrées et au moins
+/// la moitié des paragraphes couverts. Suite : la (demi-)page qui suit directement une
+/// (demi-)page de sommaire en est une si tous ses paragraphes sont couverts. Précédente :
+/// celle qui précède directement une (demi-)page de sommaire en est une si elle porte au
+/// moins une entrée et si tous ses paragraphes sont couverts, sauf un éventuel titre
+/// « Table des matières » ou « Sommaire » avant la première ; la chaîne remonte de proche
+/// en proche, mais jamais au-delà d'une (demi-)page qui s'ouvre sur le titre du sommaire.
+fn marquer_sommaires(pages: &mut [PageLue], blocs: &[Bloc]) {
+    for r in 0..pages.len() {
+        let suite = r.checked_sub(1).is_some_and(|a| pages[a].sommaire && contigues(pages, a, r));
+        let page = &pages[r];
+        let couverts = page.nb_couverts();
+        pages[r].sommaire = (page.entrees.len() >= MIN_TITRES_NIVEAU && couverts * 2 >= page.paragraphes.len())
+            || (suite && couverts == page.paragraphes.len());
     }
-    // La (demi-)page de rang `r` s'ouvre-t-elle sur le titre du sommaire (« Table des
-    // matières » ou « Sommaire » avant sa première entrée) ?
-    let ouvre_le_sommaire = |r: usize| {
-        let (_, paragraphes, entrees) = &moities[r];
-        entrees.first().is_some_and(|&(premiere, ..)| {
-            paragraphes.iter().any(|&j| j < premiere && titre_de_sommaire(&blocs[j]))
-        })
-    };
-    // Pendant de la suite : la (demi-)page qui précède directement une (demi-)page de
-    // sommaire, faite d'entrées (et d'un éventuel titre du sommaire avant la première).
-    // La chaîne remonte de proche en proche, mais jamais au-delà d'une (demi-)page qui
-    // s'ouvre sur le titre du sommaire : ce qui précède le titre n'en fait pas partie.
-    for r in (0..moities.len().saturating_sub(1)).rev() {
-        let (_, paragraphes, entrees) = &moities[r];
-        if sommaire[r] || !sommaire[r + 1] || !contigues(r, r + 1) || entrees.is_empty() || ouvre_le_sommaire(r + 1)
+    for r in (0..pages.len().saturating_sub(1)).rev() {
+        let page = &pages[r];
+        if page.sommaire
+            || !pages[r + 1].sommaire
+            || !contigues(pages, r, r + 1)
+            || page.entrees.is_empty()
+            || pages[r + 1].ouvre_le_sommaire(blocs)
         {
             continue;
         }
-        let couverts: HashSet<usize> = entrees.iter().flat_map(|&(i, n, _)| i..i + n).collect();
-        let hors: Vec<usize> = paragraphes.iter().copied().filter(|i| !couverts.contains(i)).collect();
-        sommaire[r] = match hors[..] {
+        let couverts: HashSet<usize> = page.entrees.iter().flat_map(|e| e.couverts.clone()).collect();
+        let hors: Vec<usize> = page.paragraphes.iter().copied().filter(|i| !couverts.contains(i)).collect();
+        pages[r].sommaire = match hors[..] {
             [] => true,
-            [j] => j < entrees[0].0 && titre_de_sommaire(&blocs[j]),
+            [j] => j < page.entrees[0].couverts.start && titre_de_sommaire(&blocs[j]),
             _ => false,
         };
     }
-    let debut_de_suite: Vec<bool> = (0..moities.len())
-        .map(|r| sommaire[r] && !r.checked_sub(1).is_some_and(|a| sommaire[a] && contigues(a, r)))
-        .collect();
-    let pages: BTreeSet<DemiPage> = moities.iter().zip(&sommaire).filter(|(_, s)| **s).map(|(m, _)| m.0).collect();
-    // Entrées des (demi-)pages de sommaire, dans l'ordre du livre : premier paragraphe →
-    // (nombre de paragraphes, titre visé).
-    let mut a_viser: Vec<(usize, usize, DemiPage, &Vec<(usize, DemiPage)>)> = moities
-        .iter()
-        .zip(&sommaire)
-        .filter(|(_, s)| **s)
-        .flat_map(|((demi_page, _, entrees), _)| entrees.iter().map(|(i, n, titres)| (*i, *n, *demi_page, titres)))
-        .collect();
-    a_viser.sort_by_key(|(i, ..)| *i);
-    let mut deja_vises: HashSet<usize> = HashSet::new();
-    let mut entrees: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
-    for (i, n, demi_page, titres) in a_viser {
-        let libres: Vec<&(usize, DemiPage)> = titres.iter().filter(|(t, _)| !deja_vises.contains(t)).collect();
-        let parmi = if libres.is_empty() { titres.iter().collect() } else { libres };
-        let (titre, _) = parmi.iter().find(|(_, d)| *d > demi_page).or_else(|| parmi.first()).expect("titre visé");
-        deja_vises.insert(*titre);
-        entrees.insert(i, (n, *titre));
-    }
-    let couverts: HashSet<usize> = entrees.iter().flat_map(|(&i, &(n, _))| i..i + n).collect();
+}
 
-    // Titre du sommaire, avant la première entrée de chaque suite de (demi-)pages.
-    for (_, _, entrees) in moities.iter().zip(&debut_de_suite).filter(|(_, d)| **d).map(|(m, _)| m) {
-        let premiere = entrees.first().map(|(i, ..)| *i).expect("page avec entrées");
-        // Les notes et les sauts (titre seul sur une page courte) sont passés ; un
-        // paragraphe qui est lui-même dans une entrée (suite de sommaire après une page
-        // vide) y reste.
-        let avant = blocs[..premiere].iter().rposition(|b| !matches!(b, Bloc::Note { .. } | Bloc::Saut { .. }));
-        if let Some(j) = avant
-            && !couverts.contains(&j)
-            && titre_de_sommaire(&blocs[j])
-            && let Bloc::Paragraphe(p) = &blocs[j]
-        {
+/// Sommaires du livre : suites maximales de (demi-)pages de sommaire contiguës (rangs
+/// dans `pages`).
+fn suites_de_sommaire(pages: &[PageLue]) -> Vec<Range<usize>> {
+    let mut suites: Vec<Range<usize>> = Vec::new();
+    for r in (0..pages.len()).filter(|&r| pages[r].sommaire) {
+        match suites.last_mut() {
+            Some(suite) if suite.end == r && contigues(pages, r - 1, r) => suite.end = r + 1,
+            _ => suites.push(r..r + 1),
+        }
+    }
+    suites
+}
+
+/// Reconnaissance des sommaires imprimés de `blocs` (voir `sommaire_cliquable`) : leurs
+/// (demi-)pages, leurs entrées et le titre visé par chacune, et leurs titres.
+fn reconnaitre_sommaires(blocs: &[Bloc], titre_livre: &str) -> SommairesReconnus {
+    let cibles = TitresCibles::new(blocs, titre_livre);
+    let mut pages = lire_pages(blocs, &cibles);
+    marquer_sommaires(&mut pages, blocs);
+    let suites = suites_de_sommaire(&pages);
+
+    // Entrées des (demi-)pages de sommaire, dans l'ordre des blocs, et leur (demi-)page.
+    let mut a_lier: Vec<(&EntreeReconnue, DemiPage)> = suites
+        .iter()
+        .flat_map(|rangs| &pages[rangs.clone()])
+        .flat_map(|page| page.entrees.iter().map(move |entree| (entree, page.lieu)))
+        .collect();
+    a_lier.sort_by_key(|(entree, _)| entree.couverts.start);
+    let mut deja_vises: HashSet<usize> = HashSet::new();
+    let entrees: Vec<EntreeLiee> = a_lier
+        .into_iter()
+        .map(|(entree, lieu)| {
+            let libres: Vec<&TitreCible> = entree.cibles.iter().filter(|c| !deja_vises.contains(&c.indice)).collect();
+            let parmi = if libres.is_empty() { entree.cibles.iter().collect() } else { libres };
+            let titre = parmi.iter().find(|c| c.lieu > lieu).or_else(|| parmi.first()).expect("titre visé").indice;
+            deja_vises.insert(titre);
+            EntreeLiee { couverts: entree.couverts.clone(), titre }
+        })
+        .collect();
+
+    // Titre de chaque sommaire : paragraphe placé juste avant sa première entrée (notes
+    // et sauts passés : titre seul sur une page courte), s'il n'est pas lui-même dans une
+    // entrée (suite de sommaire après une page vide).
+    let couverts: HashSet<usize> = entrees.iter().flat_map(|e| e.couverts.clone()).collect();
+    let titres_de_sommaire: Vec<usize> = suites
+        .iter()
+        .filter_map(|rangs| {
+            let premiere = pages[rangs.start].entrees.first().expect("page avec entrées").couverts.start;
+            blocs[..premiere]
+                .iter()
+                .rposition(|b| !matches!(b, Bloc::Note { .. } | Bloc::Saut { .. }))
+                .filter(|j| !couverts.contains(j) && titre_de_sommaire(&blocs[*j]))
+        })
+        .collect();
+
+    let pages = pages.iter().filter(|p| p.sommaire).map(|p| p.lieu).collect();
+    SommairesReconnus { entrees, titres_de_sommaire, pages }
+}
+
+/// Ajoute le paragraphe `suite` (même (demi-)page) à l'entrée `entree` : une espace entre
+/// les deux, ou une césure recollée sans tiret ; le rectangle s'étend au paragraphe.
+fn joindre_a_l_entree(entree: &mut Paragraphe, suite: Paragraphe) {
+    let cesure = fin_de_cesure(&entree.texte_brut(), &suite.texte_brut());
+    match entree.segments.last_mut() {
+        Some(Segment::Texte { texte, .. }) if cesure => {
+            texte.truncate(texte.trim_end().len());
+            texte.pop();
+        }
+        _ => entree.segments.push(Segment::Texte { texte: " ".into(), gras: false, italique: false }),
+    }
+    let [x0, y0, x1, y1] = entree.ancre.rect;
+    let [a0, b0, a1, b1] = suite.ancre.rect;
+    entree.ancre.rect = [x0.min(a0), y0.min(b0), x1.max(a1), y1.max(b1)];
+    entree.segments.extend(suite.segments);
+}
+
+/// Transformation des blocs selon les sommaires `reconnus` : leurs titres deviennent des
+/// titres de niveau 1, et chaque entrée une seule `EntreeSommaire` (cible : identifiant du
+/// titre visé, voir `markdown::ancre_titre`), ancrée à son premier paragraphe.
+fn lier_les_entrees(mut blocs: Vec<Bloc>, reconnus: &SommairesReconnus) -> Vec<Bloc> {
+    for &j in &reconnus.titres_de_sommaire {
+        if let Bloc::Paragraphe(p) = &blocs[j] {
             blocs[j] = Bloc::Titre { niveau: 1, texte: p.texte_brut().trim().to_string(), ancre: p.ancre };
         }
     }
-
     // Identifiants de tous les titres, dans l'ordre du Markdown.
     let mut ancres = AncresTitres::default();
     let ids: HashMap<usize, String> = blocs
@@ -1664,38 +1764,64 @@ pub fn sommaire_cliquable(
             _ => None,
         })
         .collect();
+    let par_debut: HashMap<usize, &EntreeLiee> = reconnus.entrees.iter().map(|e| (e.couverts.start, e)).collect();
     let mut sortie = Vec::with_capacity(blocs.len());
     let mut restants = blocs.into_iter().enumerate();
     while let Some((i, bloc)) = restants.next() {
-        let Some(&(n, titre)) = entrees.get(&i) else {
+        let Some(liee) = par_debut.get(&i) else {
             sortie.push(bloc);
             continue;
         };
         let Bloc::Paragraphe(mut entree) = bloc else { unreachable!("entrée faite de paragraphes") };
-        for (_, autre) in restants.by_ref().take(n - 1) {
+        for (_, autre) in restants.by_ref().take(liee.couverts.len() - 1) {
             let Bloc::Paragraphe(p) = autre else { unreachable!("entrée faite de paragraphes") };
-            let cesure = fin_de_cesure(&entree.texte_brut(), &p.texte_brut());
-            match entree.segments.last_mut() {
-                Some(Segment::Texte { texte, .. }) if cesure => {
-                    texte.truncate(texte.trim_end().len());
-                    texte.pop();
-                }
-                _ => entree.segments.push(Segment::Texte { texte: " ".into(), gras: false, italique: false }),
-            }
-            // Même (demi-)page : le rectangle s'étend au paragraphe.
-            let [x0, y0, x1, y1] = entree.ancre.rect;
-            let [a0, b0, a1, b1] = p.ancre.rect;
-            entree.ancre.rect = [x0.min(a0), y0.min(b0), x1.max(a1), y1.max(b1)];
-            entree.segments.extend(p.segments);
+            joindre_a_l_entree(&mut entree, p);
         }
-        sortie.push(Bloc::EntreeSommaire { segments: entree.segments, cible: ids[&titre].clone(), ancre: entree.ancre });
+        sortie.push(Bloc::EntreeSommaire { segments: entree.segments, cible: ids[&liee.titre].clone(), ancre: entree.ancre });
     }
-    let blocs = sortie;
+    sortie
+}
 
-    let points = points_de_sommaire(&blocs, &pages, |page| {
+/// Sommaire imprimé rendu cliquable, en deux temps : reconnaissance des sommaires
+/// (`reconnaitre_sommaires`), puis transformation des blocs (`lier_les_entrees`).
+///
+/// Une entrée est faite de 1 à 3 paragraphes consécutifs d'une même (demi-)page
+/// (`paragraphes_d_entree`, texte joint `texte_entree` : césure recollée, sans le numéro
+/// de page final ni les points de conduite) qui portent le texte d'un titre situé sur une
+/// autre (demi-)page (`normaliser_titre`), ou ce texte sans son numéro en tête
+/// (`NUMERO_EN_TETE` : « Les bases » vise « I. LES BASES ») ; l'entrée la plus longue qui
+/// vise un titre après sa (demi-)page l'emporte, à défaut la plus longue qui en vise un.
+///
+/// Une (demi-)page de sommaire porte au moins 3 entrées, et au moins la moitié de ses
+/// paragraphes sont couverts par des entrées (un faux-titre de 3 lignes, une seule entrée,
+/// n'en est pas une) ; la (demi-)page qui suit directement une (demi-)page de sommaire en
+/// est aussi une si tous ses paragraphes sont couverts, et celle qui la précède
+/// directement (dans l'ordre de lecture : p3g avant p3d) aussi, si elle porte au moins
+/// une entrée et si tous ses paragraphes sont couverts, sauf un éventuel titre « Table
+/// des matières » ou « Sommaire » placé avant la première (voir `marquer_sommaires`).
+///
+/// Le titre visé est le premier de ce texte après la (demi-)page de l'entrée, à défaut le
+/// premier du livre, en sautant les titres déjà visés par une entrée précédente tant
+/// qu'il en reste un libre (titres homonymes visés dans l'ordre) ; le titre du livre
+/// (premier titre de niveau 1, s'il porte `titre_livre`) n'est jamais visé. Chaque entrée
+/// devient une seule `EntreeSommaire` qui garde tout le texte de ses paragraphes, joints
+/// par une espace ou recollés sur une césure, ancrée au premier, rectangle étendu aux
+/// autres ; le paragraphe « Table des matières » ou « Sommaire » placé juste avant la
+/// première entrée d'une suite de (demi-)pages de sommaire (notes et sauts passés), s'il
+/// n'est pas lui-même dans une entrée, devient un titre de niveau 1.
+///
+/// Renvoie aussi un point `Sommaire` par page qui contient un sommaire, ancré à sa
+/// première (demi-)page de sommaire, et les (demi-)pages de sommaire.
+pub fn sommaire_cliquable(
+    blocs: Vec<Bloc>,
+    titre_livre: &str,
+) -> (Vec<Bloc>, Vec<PointAVerifier>, BTreeSet<DemiPage>) {
+    let reconnus = reconnaitre_sommaires(&blocs, titre_livre);
+    let blocs = lier_les_entrees(blocs, &reconnus);
+    let points = points_de_sommaire(&blocs, &reconnus.pages, |page| {
         format!("la page {page} est un sommaire imprimé : ses entrées renvoient aux titres")
     });
-    (blocs, points, pages)
+    (blocs, points, reconnus.pages)
 }
 
 #[cfg(test)]
