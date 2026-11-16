@@ -14,11 +14,27 @@ pub struct Rect {
     pub y1: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Moitié d'une page. L'ordre suit la lecture : gauche avant droite ; une page entière
+/// est seule sur sa page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Moitie {
     Entiere,
     Gauche,
     Droite,
+}
+
+/// (Demi-)page : numéro de page et moitié. L'ordre de `(u32, Moitie)` est celui de la
+/// lecture (p3g, p3d, p4g…).
+pub type DemiPage = (u32, Moitie);
+
+/// (Demi-)page qui suit `(page, moitie)` dans l'ordre de lecture : la moitié droite après
+/// la gauche, sinon le début de la page suivante : `(page + 1, Moitie::Entiere)`, qui
+/// ne vient après aucune moitié de cette page.
+pub fn demi_page_suivante((page, moitie): DemiPage) -> DemiPage {
+    match moitie {
+        Moitie::Gauche => (page, Moitie::Droite),
+        Moitie::Entiere | Moitie::Droite => (page + 1, Moitie::Entiere),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,6 +65,11 @@ pub struct Ancre {
 }
 
 impl Ancre {
+    /// (Demi-)page de l'ancre.
+    pub fn demi_page(&self) -> DemiPage {
+        (self.page, self.moitie)
+    }
+
     pub fn depuis(page: u32, moitie: Moitie, r: Rect) -> Ancre {
         let m = |v: f32| (v * 1000.0).round().clamp(0.0, 1000.0) as u16;
         Ancre { page, moitie, rect: [m(r.x0), m(r.y0), m(r.x1), m(r.y1)] }

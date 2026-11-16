@@ -8,7 +8,7 @@ use regex::Regex;
 
 use crate::blocs::{Bloc, Paragraphe, Segment};
 use crate::lignes::Ligne;
-use crate::modele::{Moitie, Ancre, Rect};
+use crate::modele::{Ancre, DemiPage, Moitie, Rect};
 
 /// Géométrie du bloc de texte, mesurée sur le livre.
 #[derive(Clone, Copy, Debug)]
@@ -436,7 +436,8 @@ fn fusionner(p: &mut Paragraphe, suite: Paragraphe, vocab: &Vocabulaire) {
 
 /// Raccorde les paragraphes coupés par un saut de page. Les notes situées entre
 /// les deux sont sautées (elles gardent leur place) ; un titre bloque le raccord,
-/// de même qu'une page de sommaire d'un côté ou de l'autre (ses lignes restent seules),
+/// de même qu'une (demi-)page de sommaire (`sommaires`) d'un côté ou de l'autre (ses
+/// lignes restent seules ; l'autre moitié d'une page double se raccorde normalement),
 /// ou deux entrées numérotées de même genre (« IV. » puis « V. »), ou un paragraphe qui
 /// finit par des points de conduite et un numéro de page. Un paragraphe dont
 /// l'ancre est dans `isoles` (ligne illisible refusée comme titre) ne se raccorde ni
@@ -444,24 +445,24 @@ fn fusionner(p: &mut Paragraphe, suite: Paragraphe, vocab: &Vocabulaire) {
 pub fn raccorder_pages(
     blocs: Vec<Bloc>,
     vocab: &Vocabulaire,
-    pages_sommaire: &BTreeSet<u32>,
+    sommaires: &BTreeSet<DemiPage>,
     isoles: &HashSet<Ancre>,
 ) -> Vec<Bloc> {
     let mut sortie: Vec<Bloc> = Vec::new();
     // (Demi-)page où finit le dernier paragraphe : celle de son ancre, ou de la suite qui
     // lui a été collée. Seul le premier paragraphe de la (demi-)page suivante peut s'y raccorder.
-    let mut fin: Option<(u32, Moitie)> = None;
+    let mut fin: Option<DemiPage> = None;
     for bloc in blocs {
         let Bloc::Paragraphe(suite) = bloc else {
             sortie.push(bloc);
             continue;
         };
-        let debut_suite = (suite.ancre.page, suite.ancre.moitie);
+        let debut_suite = suite.ancre.demi_page();
         let precedent = sortie.iter_mut().rev().find(|b| !matches!(b, Bloc::Note { .. }));
         if let Some(Bloc::Paragraphe(p)) = precedent {
             let autre_page = fin.is_some_and(|f| f != debut_suite);
             let ouvert = fin_ouverte(&p.segments);
-            let sommaire = pages_sommaire.contains(&p.ancre.page) || pages_sommaire.contains(&suite.ancre.page);
+            let sommaire = sommaires.contains(&p.ancre.demi_page()) || sommaires.contains(&debut_suite);
             let entrees = enumeration(&suite.texte_brut()).is_some_and(|e| enumeration(&p.texte_brut()) == Some(e));
             let isole = isoles.contains(&p.ancre) || isoles.contains(&suite.ancre);
             let ligne_de_sommaire = finit_par_points_de_conduite(p.texte_brut().trim_end());
@@ -744,11 +745,30 @@ mod tests {
 
     #[test]
     fn pas_de_raccord_avec_une_page_de_sommaire() {
-        let sommaire = BTreeSet::from([6]);
+        let sommaire = BTreeSet::from([(6, Moitie::Entiere)]);
         let blocs = vec![para("benjamin@exemple.com", 5, 0.8), para("RÉSUMÉ", 6, 0.1)];
         assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &sommaire, &HashSet::new()).len(), 2);
         let blocs = vec![para("TRADITION CABALISTIQUE", 6, 0.8), para("CHAPITRE 6:", 7, 0.1)];
         assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &sommaire, &HashSet::new()).len(), 2);
+    }
+
+    #[test]
+    fn moitie_gauche_d_une_page_de_sommaire_se_raccorde() {
+        // Seule la moitié droite de la page 3 est un sommaire.
+        let en = |texte: &str, page: u32, moitie: Moitie, y0: f32| {
+            let Bloc::Paragraphe(mut p) = para(texte, page, y0) else { unreachable!() };
+            p.ancre.moitie = moitie;
+            Bloc::Paragraphe(p)
+        };
+        let sommaire = BTreeSet::from([(3, Moitie::Droite)]);
+        let blocs = vec![
+            en("ce que", 2, Moitie::Droite, 0.8),
+            en("l'on dit", 3, Moitie::Gauche, 0.1),
+            en("et la suite", 3, Moitie::Gauche, 0.8),
+            en("Table des matières", 3, Moitie::Droite, 0.1),
+        ];
+        let r = raccorder_pages(blocs, &Vocabulaire::default(), &sommaire, &HashSet::new());
+        assert_eq!(r.iter().map(texte_de).collect::<Vec<_>>(), ["ce que l'on dit", "et la suite", "Table des matières"]);
     }
 
     #[test]

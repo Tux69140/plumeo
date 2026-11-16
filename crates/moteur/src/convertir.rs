@@ -1,8 +1,6 @@
 //! Conversion d'un livre (ou d'une page) : toutes les étapes du moteur, de la
 //! lecture du PDF au Markdown ancré.
 
-use std::collections::BTreeSet;
-
 use serde::Serialize;
 
 use crate::blocs::{Bloc, Segment};
@@ -131,7 +129,8 @@ pub fn convertir_livre(
     }
 
     let source = forcer_titres.unwrap_or(reglages.titres);
-    let (blocs, pts, source_titres, retraits_titres, illisibles) = detecter_titres(blocs, &doc.signets(), nb_pages, source);
+    let (blocs, pts, source_titres, retraits_titres, illisibles, mut sommaires) =
+        detecter_titres(blocs, &doc.signets(), nb_pages, source);
     points.extend(pts);
     retraits.extend(retraits_titres);
     // Avant le raccord des pages (le titre ne s'y recolle pas) et le nettoyage des
@@ -140,20 +139,18 @@ pub fn convertir_livre(
     let (blocs, retraits_notes, pts) = notes_regroupees(blocs, &mut etiqueteuse, &vocab);
     retraits.extend(retraits_notes);
     points.extend(pts);
-    let mut sommaires: BTreeSet<u32> =
-        points.iter().filter(|p| p.genre == GenrePoint::Sommaire).map(|p| p.ancre.page).collect();
     // Après le regroupement des notes (qui peut retirer un titre « Notes ») : les
-    // identifiants visés par le sommaire sont ceux des titres définitifs. Ses pages
-    // ne se raccordent pas. Un seul point par page : celui du sommaire cliquable
+    // identifiants visés par le sommaire sont ceux des titres définitifs. Ses
+    // (demi-)pages, comme celles des sommaires conservés comme texte (`sommaires`), ne
+    // se raccordent pas ; l'autre moitié d'une page double, si elle n'en est pas une, se
+    // raccorde normalement. Un seul point par page : celui du sommaire cliquable
     // remplace « conservée comme texte » d'une page déjà reconnue comme sommaire.
-    let (blocs, pts) = sommaire_cliquable(blocs, titre_livre);
+    let (blocs, pts, moities_cliquables) = sommaire_cliquable(blocs, titre_livre);
+    sommaires.extend(moities_cliquables);
     for point in pts {
-        if sommaires.insert(point.ancre.page) {
-            points.push(point);
-        } else if let Some(ancien) =
-            points.iter_mut().find(|p| p.genre == GenrePoint::Sommaire && p.ancre.page == point.ancre.page)
-        {
-            *ancien = point;
+        match points.iter_mut().find(|p| p.genre == GenrePoint::Sommaire && p.ancre.page == point.ancre.page) {
+            Some(ancien) => *ancien = point,
+            None => points.push(point),
         }
     }
     let blocs = nettoyer_sauts(raccorder_pages(blocs, &vocab, &sommaires, &illisibles));
