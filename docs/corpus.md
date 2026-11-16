@@ -121,7 +121,7 @@ Les durées sont celles du dernier passage (2026-11-16, après les retours du co
 |---|---|---|---|
 | 1 | signets, ~~73~~ ~~27~~ **17** n1 + 5 n2 dont « VISITE À PATMOS » (voir plus bas) ; ≥ 46 notes appariées | signets, 17 n1 + 5 n2 (« 1 VISITE À PATMOS »…) ; 46 notes appariées ; médiane 419 car. | 0,3 s |
 | 2 | gras-majuscules, 10 n1 tous à partir de la p. 19, dont « LES 4 ÉLÉMENTS », « LA GENÈSE », « LUCIFER ET LE CHRIST » (attente réécrite, voir plus bas) | gras-majuscules, les 10 ouvertures du corps (pp. 19, 26, 31, 32, 33, 36, 38, 40, 53, 56) ; 29 n2 ; 48 titres courants retirés ; résumé pp. 6-11 en sommaire ; médiane **35** (dérogation) | 0,8 s |
-| 3 | pas de titre courant ; note `*` p. 36 ; 5 à 60 n1 | 0 titre courant ; 7 notes dont `*` p. 36 ; 14 n1 (les titres illisibles, `# Corps m\--`, `# np`, `# s`…, restent des paragraphes avec un point à vérifier) | 1,2 s |
+| 3 | pas de titre courant ; note `*` p. 36 ; 5 à 60 n1 | 0 titre courant ; 7 notes dont `*` p. 36 ; 14 n1 (les titres illisibles, `# Corps m\--`, `# np`, `# s`…, restent des paragraphes avec le point « texte peu plausible pour un titre (OCR, schéma, code) : non retenu ») | 1,2 s |
 | 4 | signets, 22 titres (23 moins « SOMMAIRE », titre de service) | signets, 22 n1, 0 n2, 12 entrées de sommaire | 0,7 s |
 | 5 | signets, 4 n1 et 7 n2 | signets, 4 n1, 7 n2 | 0,3 s |
 | 6 | `g` et `d` ; pas de « 92 93 » ; ≥ 1 note appariée ; titre du livre en tête | `g` et `d` ; 0 pied résiduel ; 5 notes appariées | 0,2 s |

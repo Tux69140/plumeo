@@ -608,7 +608,7 @@ fn titres_par_candidats(
         .map(|p| PointAVerifier {
             ancre: p.ancre,
             genre: GenrePoint::TitreSuspect,
-            message: "ligne illisible non retenue comme titre (OCR ou schéma)".to_string(),
+            message: "texte peu plausible pour un titre (OCR, schéma, code) : non retenu".to_string(),
         })
         .collect();
     let illisibles: HashSet<Ancre> = refuses.iter().map(|p| p.ancre).collect();
@@ -1850,7 +1850,7 @@ mod tests {
     }
 
     #[test]
-    fn titre_illisible_reste_paragraphe_avec_un_point() {
+    fn titre_peu_plausible_reste_paragraphe_avec_un_point() {
         let blocs = vec![
             corps(1, &texte_long()),
             para(2, "Douceur et humilité", 18.0, false, 1),
@@ -1867,7 +1867,7 @@ mod tests {
             .filter(|p| p.genre == GenrePoint::TitreSuspect && p.ancre.page == 3)
             .collect();
         assert_eq!(suspects.len(), 1);
-        assert_eq!(suspects[0].message, "ligne illisible non retenue comme titre (OCR ou schéma)");
+        assert_eq!(suspects[0].message, "texte peu plausible pour un titre (OCR, schéma, code) : non retenu");
         assert!(points.iter().all(|p| p.ancre.page != 2));
     }
 
