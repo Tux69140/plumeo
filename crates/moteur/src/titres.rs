@@ -122,6 +122,45 @@ fn candidat_taille(p: &Paragraphe, corps: f32) -> bool {
     p.taille >= corps + ECART_TAILLE_TITRE && court(p, &p.texte_brut())
 }
 
+/// Part minimale de lettres parmi les caractères non blancs d'un titre.
+const PART_MIN_LETTRES_TITRE: f32 = 0.7;
+/// Caractères qui trahissent une ligne issue d'un OCR défaillant ou d'un schéma.
+const CARACTERES_ILLISIBLES: &str = "~\\|{}[]<>_^@";
+
+/// Le texte d'un candidat à titre est-il lisible ? Un OCR défaillant (symboles du
+/// zodiaque, texte de schémas) donne des lignes qui n'ont rien d'un titre. Il faut :
+/// au moins 3 lettres ; au moins 70 % de lettres parmi les caractères non blancs ;
+/// un premier caractère qui est une lettre, un chiffre, `(`, `«` ou `*` (les titres
+/// encadrés d'astérisques, « * SEPHIRA KÉTHER * », sont de vrais titres) ; aucun des
+/// caractères `~ \ | { } [ ] < > _ ^ @` ; aucun `--` ; aucun mot qui mêle lettres et
+/// chiffres (`LI11î`, `SPIRITUEI.1LE`). Les ordinaux (`2e`, `1er`, `3ème`, `1ère`,
+/// `4es`), qui se rencontrent dans de vrais titres, ne comptent pas comme mêlés ;
+/// la ponctuation autour du mot est ignorée pour ce test. Une ligne de date seule
+/// (`est_date`) est toujours plausible : ses chiffres feraient chuter la part de lettres.
+fn titre_plausible(texte: &str) -> bool {
+    static ORDINAL: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)^\d+(?:e|er|re|ère|ème|es)$").expect("motif valide"));
+    let texte = texte.trim();
+    if est_date(texte) {
+        return true;
+    }
+    let non_blancs = texte.chars().filter(|c| !c.is_whitespace()).count();
+    let lettres = texte.chars().filter(|c| c.is_alphabetic()).count();
+    if lettres < 3 || (lettres as f32) < PART_MIN_LETTRES_TITRE * non_blancs as f32 {
+        return false;
+    }
+    if !texte.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '(' || c == '«' || c == '*') {
+        return false;
+    }
+    if texte.chars().any(|c| CARACTERES_ILLISIBLES.contains(c)) || texte.contains("--") {
+        return false;
+    }
+    !texte.split_whitespace().any(|mot| {
+        let mot = mot.trim_matches(|c: char| !c.is_alphanumeric());
+        mot.chars().any(char::is_alphabetic) && mot.chars().any(|c| c.is_ascii_digit()) && !ORDINAL.is_match(mot)
+    })
+}
+
 /// Pages dont la plupart des paragraphes ressemblent à des lignes de sommaire : ils
 /// finissent par un numéro de page, après une espace ou des points de conduite. Des
 /// points de suspension au milieu du texte ne suffisent pas.
@@ -517,13 +556,27 @@ fn nomme_un_chapitre(p: &Paragraphe) -> bool {
 /// 3 titres nomment un chapitre, ils forment le niveau 1 et les autres descendent
 /// d'un niveau ; sinon les niveaux suivent la taille. `niveau_1_pris` : le niveau 1
 /// est déjà donné (titres du résumé), les candidats commencent au niveau 2.
+/// Un candidat dont le texte n'est pas plausible (`titre_plausible`) reste un
+/// paragraphe et donne un point à vérifier.
 fn titres_par_candidats(
     blocs: Vec<Bloc>,
     pages_som: &BTreeSet<u32>,
     candidat: impl Fn(&Paragraphe) -> bool,
     niveau_1_pris: bool,
-) -> Vec<Bloc> {
-    let est_candidat = |p: &Paragraphe| !pages_som.contains(&p.ancre.page) && candidat(p);
+) -> (Vec<Bloc>, Vec<PointAVerifier>) {
+    let est_candidat_brut = |p: &Paragraphe| !pages_som.contains(&p.ancre.page) && candidat(p);
+    let est_candidat = |p: &Paragraphe| est_candidat_brut(p) && titre_plausible(&p.texte_brut());
+    let points: Vec<PointAVerifier> = blocs
+        .iter()
+        .filter_map(|b| match b {
+            Bloc::Paragraphe(p) if est_candidat_brut(p) && !est_candidat(p) => Some(PointAVerifier {
+                ancre: p.ancre,
+                genre: GenrePoint::TitreSuspect,
+                message: "ligne illisible non retenue comme titre (OCR ou schéma)".to_string(),
+            }),
+            _ => None,
+        })
+        .collect();
     let candidats: Vec<&Paragraphe> = blocs
         .iter()
         .filter_map(|b| match b {
@@ -536,7 +589,7 @@ fn titres_par_candidats(
     let niveaux = NiveauxParTaille::mesurer(candidats.iter().filter(|p| !chapitre(p)).map(|p| p.taille).collect());
     let decalage = u8::from(par_chapitres || niveau_1_pris);
 
-    blocs
+    let blocs = blocs
         .into_iter()
         .map(|b| match b {
             Bloc::Paragraphe(p) if est_candidat(&p) => Bloc::Titre {
@@ -546,7 +599,8 @@ fn titres_par_candidats(
             },
             autre => autre,
         })
-        .collect()
+        .collect();
+    (blocs, points)
 }
 
 /// Ligne de date seule : « (2 FÉVRIER 1995) », « 1er mars 1914. ».
@@ -795,7 +849,11 @@ pub fn detecter_titres(
             let nb_gras_maj = blocs
                 .iter()
                 .filter(|b| match b {
-                    Bloc::Paragraphe(p) => !pages_som.contains(&p.ancre.page) && candidat_gras_majuscules(p),
+                    Bloc::Paragraphe(p) => {
+                        !pages_som.contains(&p.ancre.page)
+                            && candidat_gras_majuscules(p)
+                            && titre_plausible(&p.texte_brut())
+                    }
                     _ => false,
                 })
                 .count();
@@ -851,7 +909,9 @@ pub fn detecter_titres(
             } else {
                 blocs
             };
-            fusionner_titres_consecutifs(titres_par_candidats(blocs, &pages_som, candidat, niveau_1_pris))
+            let (blocs, illisibles) = titres_par_candidats(blocs, &pages_som, candidat, niveau_1_pris);
+            points.extend(illisibles);
+            fusionner_titres_consecutifs(blocs)
         }
     };
     points.extend(titres_courants_suspects(&blocs));
@@ -1490,5 +1550,78 @@ mod tests {
     fn taille_corps_pondere_par_caracteres() {
         let blocs = vec![para(1, "court", 18.0, false, 1), corps(1, &texte_long()), para(1, "x", 12.2, false, 1)];
         assert_eq!(taille_corps(&blocs), 12.0);
+    }
+
+    #[test]
+    fn titre_plausible_refuse_les_lignes_illisibles() {
+        for faux in [
+            "Omraam Mikhaël AiYanhov SPIRITUEI.1LE~ALCHIM[IE",
+            "~uvres complètes - Tome 2 EDITIONS PROS VET A",
+            "Omraam Mikhaël Aïvanhov ~ALCHIMIE SPIRITUELLE",
+            "? SUPERIEURE",
+            "Corps m\\--",
+            "Corpsastral -- ~Q .,> .. ~--- -- --- --- Cœur",
+            "np / /",
+            "s",
+            "\\-- ---- ----glandelacrymale",
+            "1U LI11î ISBN 2-85566-331·8",
+            "Titre avec -- tirets",
+            "Mot LI11î mêlé",
+            "ab",
+        ] {
+            assert!(!titre_plausible(faux), "devrait être refusé : {faux}");
+        }
+    }
+
+    #[test]
+    fn titre_plausible_accepte_les_vrais_titres() {
+        for vrai in [
+            "Douceur et humilité",
+            "(Jésus entre les deux larrons)",
+            "Si vous ne mourez . pas, vous ne vivrez pas",
+            "Echanges vivants et conscients",
+            "L’économe infidèle",
+            "L'économe infidèle",
+            "(personnalité et individualité)",
+            "Amassez des trésors",
+            "Le miracle des deux poissons et des cinq pains",
+            "Les pieds et le plexus solaire",
+            "La parabole de l’ivraie et du froment",
+            "L’alchimie spirituelle",
+            "La galvanoplastie spirituelle",
+            "Les pouvoirs de la mère pendant la gestation",
+            "EDITIONS PROSVETA",
+            "« Le Verbe » et la parole",
+            "2e partie",
+            "1er mars et XIIe siècle",
+            "1ère leçon",
+            "3. MELKHITSÉDEK",
+            "* SEPHIRA KÉTHER *",
+            "(2 FÉVRIER 1995)",
+            "1er mars 1914.",
+        ] {
+            assert!(titre_plausible(vrai), "devrait être accepté : {vrai}");
+        }
+    }
+
+    #[test]
+    fn titre_illisible_reste_paragraphe_avec_un_point() {
+        let blocs = vec![
+            corps(1, &texte_long()),
+            para(2, "Douceur et humilité", 18.0, false, 1),
+            corps(2, &texte_long()),
+            para(3, "Corps m\\--", 18.0, false, 1),
+            corps(3, &texte_long()),
+        ];
+        let (blocs, points, _, _) = detecter_titres(blocs, &[], 3, SourceTitres::Taille);
+        assert_eq!(titres(&blocs), vec![(1, "Douceur et humilité".to_string())]);
+        assert!(blocs.iter().any(|b| matches!(b, Bloc::Paragraphe(p) if p.texte_brut() == "Corps m\\--")));
+        let suspects: Vec<_> = points
+            .iter()
+            .filter(|p| p.genre == GenrePoint::TitreSuspect && p.ancre.page == 3)
+            .collect();
+        assert_eq!(suspects.len(), 1);
+        assert_eq!(suspects[0].message, "ligne illisible non retenue comme titre (OCR ou schéma)");
+        assert!(points.iter().all(|p| p.ancre.page != 2));
     }
 }
