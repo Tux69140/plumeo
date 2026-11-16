@@ -329,6 +329,7 @@ Le volet offre le zoom, le numéro de page et la recherche.
 - repères de page visibles ;
 - commentaires d'ancre atténués ou repliés ;
 - coloration des titres et des notes ;
+- balises HTML en ligne (`<sup>`, `<em>`, `<strong>`) colorées à part, pour qu'on les repère au survol ;
 - enregistrement automatique dans le stockage.
 
 ### 4.4 Synchro au paragraphe
@@ -343,6 +344,7 @@ Le défilement proportionnel de Lumosphère ne suffit pas.
 ### 4.5 Points à vérifier
 **Étapes :**
 - la liste ⚑ : titres suspects, texte douteux, notes orphelines, sommaire, retraits douteux, et plus tard tableaux et schémas ;
+- un point ⚑ « balise HTML non reconnue » pour toute balise hors de la liste blanche de `plumeo-epub` : elle serait affichée en texte dans l'EPUB. La vérification réutilise la fonction de `plumeo-epub`, recalculée à chaque modification du Markdown ;
 - un clic amène aux deux endroits ;
 - on peut marquer un point comme vu.
 
@@ -362,7 +364,8 @@ Le défilement proportionnel de Lumosphère ne suffit pas.
 1. « Valider » génère l'EPUB depuis le Markdown révisé.
 2. Un livre ouvert en révision n'est plus touché par les changements de sa série.
 3. « Reconvertir » reste possible, mais avec un avertissement : les corrections sont perdues.
-4. Avant d'accepter du Markdown édité, resserrer la liste blanche HTML de `plumeo-epub` (relecture finale du jalon 1) :
+4. « Valider » refuse un livre qui contient encore une balise HTML non reconnue, et renvoie au point ⚑.
+5. Avant d'accepter du Markdown édité, resserrer la liste blanche HTML de `plumeo-epub` (relecture finale du jalon 1) :
    - attributs de `img`, `br` et `hr` filtrés : ni `onerror`, ni `src` externe ou absent du paquet ;
    - un `>` entre guillemets ne ferme pas la balise (`<img alt="a>b">`) ;
    - entités HTML nommées (`&nbsp;`) converties au lieu de rendre l'XHTML invalide.
@@ -449,6 +452,7 @@ Le défilement proportionnel de Lumosphère ne suffit pas.
 **Étapes :**
 1. Détecter les tableaux (filets, alignements).
 2. Reconstruire les lignes et les cellules en `<table>`.
+   Ajouter `table`, `thead`, `tbody`, `tr`, `th` et `td` à la liste blanche de `plumeo-epub` : sinon le tableau sort en texte, et le point ⚑ « balise HTML non reconnue » (4.5) se déclenche.
 3. Signaler chaque tableau comme point à vérifier.
 4. En révision, permettre de **basculer le tableau en image**.
 
