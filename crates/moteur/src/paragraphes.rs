@@ -106,6 +106,38 @@ fn enumeration(texte: &str) -> Option<Enumeration> {
     Some(if c.get(1).is_some() { Enumeration::Chiffres } else { Enumeration::Romains })
 }
 
+/// Points de conduite (au moins 3 points, espacés ou non, ou une ellipse) suivis d'un
+/// numéro de page en fin de texte. « l 07 », « I07 »… y comptent comme un numéro
+/// (OCR de « 107 »).
+static ENTREE_A_POINTS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:(?:\.\s*){3,}|\u{2026}\s*)(?:\d{1,4}|[lI]\s?\d{1,3})\s*$").unwrap());
+
+static NUMERO_DE_PAGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d{1,4}$").unwrap());
+
+/// Écart (part de la largeur du bloc) entre le numéro de page et le mot qui le précède
+/// au-delà duquel une ligne est une entrée de sommaire (« Notes      175 »).
+const GRAND_BLANC: f32 = 0.10;
+
+/// Le texte finit-il par des points de conduite et un numéro de page ?
+pub(crate) fn finit_par_points_de_conduite(texte: &str) -> bool {
+    ENTREE_A_POINTS.is_match(texte)
+}
+
+/// Ligne d'entrée de sommaire : elle finit par un numéro de page précédé de points de
+/// conduite ou d'un grand blanc (écart avec le mot précédent supérieur à `GRAND_BLANC`
+/// de la largeur du bloc).
+fn ligne_entree(l: &Ligne, bloc: BlocTexte) -> bool {
+    if finit_par_points_de_conduite(&l.texte()) {
+        return true;
+    }
+    let n = l.mots.len();
+    if n < 2 || l.exposants.contains(&(n - 1)) {
+        return false;
+    }
+    let (avant, numero) = (&l.mots[n - 2], &l.mots[n - 1]);
+    NUMERO_DE_PAGE.is_match(numero.texte.trim()) && numero.rect.x0 - avant.rect.x1 > GRAND_BLANC * (bloc.x1 - bloc.x0)
+}
+
 /// Faut-il couper le paragraphe entre `prec` et `l` ? `premiere` est la première
 /// ligne du paragraphe en cours.
 fn coupure(premiere: &Ligne, prec: &Ligne, l: &Ligne, bloc: BlocTexte) -> bool {
@@ -114,6 +146,8 @@ fn coupure(premiere: &Ligne, prec: &Ligne, l: &Ligne, bloc: BlocTexte) -> bool {
     // Chaque entrée numérotée (sommaire, liste) reste un paragraphe à part.
     let entree = enumeration(&l.texte()).is_some_and(|e| enumeration(&premiere.texte()) == Some(e));
     entree
+        // Une ligne d'entrée de sommaire finit son paragraphe (jamais de coupure avant).
+        || ligne_entree(prec, bloc)
         || !ligne_pleine(prec, bloc)
         || l.rect.y0 - prec.rect.y0 > 1.5 * bloc.interligne
         || (retrait(l.rect.x0) && !retrait(prec.rect.x0))
@@ -375,7 +409,8 @@ fn fusionner(p: &mut Paragraphe, suite: Paragraphe, vocab: &Vocabulaire) {
 /// Raccorde les paragraphes coupés par un saut de page. Les notes situées entre
 /// les deux sont sautées (elles gardent leur place) ; un titre bloque le raccord,
 /// de même qu'une page de sommaire d'un côté ou de l'autre (ses lignes restent seules),
-/// ou deux entrées numérotées de même genre (« IV. » puis « V. »). Un paragraphe dont
+/// ou deux entrées numérotées de même genre (« IV. » puis « V. »), ou un paragraphe qui
+/// finit par des points de conduite et un numéro de page. Un paragraphe dont
 /// l'ancre est dans `isoles` (ligne illisible refusée comme titre) ne se raccorde ni
 /// à ce qui précède ni à ce qui suit : il reste seul.
 pub fn raccorder_pages(
@@ -401,7 +436,15 @@ pub fn raccorder_pages(
             let sommaire = pages_sommaire.contains(&p.ancre.page) || pages_sommaire.contains(&suite.ancre.page);
             let entrees = enumeration(&suite.texte_brut()).is_some_and(|e| enumeration(&p.texte_brut()) == Some(e));
             let isole = isoles.contains(&p.ancre) || isoles.contains(&suite.ancre);
-            if autre_page && ouvert && !sommaire && !entrees && !isole && !suite.texte_brut().is_empty() {
+            let ligne_de_sommaire = finit_par_points_de_conduite(p.texte_brut().trim_end());
+            if autre_page
+                && ouvert
+                && !sommaire
+                && !entrees
+                && !isole
+                && !ligne_de_sommaire
+                && !suite.texte_brut().is_empty()
+            {
                 fusionner(p, suite, vocab);
                 fin = Some(debut_suite);
                 continue;
@@ -733,6 +776,94 @@ mod tests {
         // Chiffres romains, avec une entrée sur deux lignes.
         let p = paragraphes_page(&lignes_pleines(&["III. La pierre", "angulaire", "IV. Le fleuve"]), 5, Moitie::Entiere, BLOC, &v);
         assert_eq!(textes(&p), vec!["III. La pierre angulaire", "IV. Le fleuve"]);
+    }
+
+    /// Ligne de mots régulièrement espacés de `x0` à `x1` (texte justifié, points de
+    /// conduite) : chaque mot occupe 80 % de sa case.
+    fn ligne_reguliere(texte: &str, x0: f32, x1: f32, y0: f32) -> Ligne {
+        let mots: Vec<&str> = texte.split_whitespace().collect();
+        let case = (x1 - x0) / mots.len() as f32;
+        ligne_de_mots(
+            mots.iter()
+                .enumerate()
+                .map(|(i, m)| {
+                    let debut = x0 + case * i as f32;
+                    mot(m, debut, debut + 0.8 * case, y0, 12.0, false, false)
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn lignes_d_entree_a_points_de_conduite_coupees_apres() {
+        let lignes = vec![
+            ligne_reguliere("Douceur et humilité . . . . 11", 0.1, 0.9, 0.10),
+            ligne_reguliere("Si vous ne mourez pas . . . 31", 0.1, 0.9, 0.13),
+        ];
+        let p = paragraphes_page(&lignes, 205, Moitie::Entiere, BLOC, &Vocabulaire::default());
+        assert_eq!(textes(&p), vec!["Douceur et humilité . . . . 11", "Si vous ne mourez pas . . . 31"]);
+        // Points collés, en désordre, ou ellipse.
+        for texte in ["L'alchimie spirituelle ...... 67", "La parabole .. ..... 145", "Le fleuve \u{2026} 12"] {
+            assert!(ligne_entree(&ligne_reguliere(texte, 0.1, 0.9, 0.1), BLOC), "{texte}");
+        }
+    }
+
+    #[test]
+    fn numero_lu_l_07_apres_des_points_de_conduite() {
+        for fin in ["l 07", "l07", "I 07", "I07"] {
+            let texte = format!("Le miracle des deux poissons et des cinq pains . . . . {fin}");
+            assert!(ligne_entree(&ligne_reguliere(&texte, 0.1, 0.9, 0.1), BLOC), "{texte}");
+        }
+    }
+
+    #[test]
+    fn ligne_d_entree_a_grand_blanc_coupee_apres() {
+        let notes = ligne_de_mots(vec![
+            mot("Notes", 0.1, 0.18, 0.10, 12.0, false, false),
+            mot("175", 0.86, 0.9, 0.10, 12.0, false, false),
+        ]);
+        let lignes = vec![notes, ligne_reguliere("Ouvrages de Rudolf Steiner disponibles en langue", 0.1, 0.9, 0.13)];
+        let p = paragraphes_page(&lignes, 3, Moitie::Droite, BLOC, &Vocabulaire::default());
+        assert_eq!(textes(&p), vec!["Notes 175", "Ouvrages de Rudolf Steiner disponibles en langue"]);
+    }
+
+    #[test]
+    fn ligne_justifiee_finie_par_une_annee_ne_coupe_pas() {
+        let lignes = vec![
+            ligne_reguliere("ces conférences furent données à Berlin en 1903", 0.1, 0.9, 0.10),
+            ligne_reguliere("devant les membres de la société", 0.1, 0.9, 0.13),
+        ];
+        let p = paragraphes_page(&lignes, 3, Moitie::Entiere, BLOC, &Vocabulaire::default());
+        assert_eq!(p.len(), 1);
+    }
+
+    #[test]
+    fn entree_sur_deux_lignes_reste_un_paragraphe() {
+        let lignes = vec![
+            ligne_reguliere("L'élaboration des concepts et le système des catégories", 0.1, 0.9, 0.10),
+            ligne_reguliere("chez Hegel . . . . . . 114", 0.1, 0.9, 0.13),
+            ligne_reguliere("La culture pratique . . . . 128", 0.1, 0.9, 0.16),
+        ];
+        let p = paragraphes_page(&lignes, 3, Moitie::Entiere, BLOC, &Vocabulaire::default());
+        assert_eq!(
+            textes(&p),
+            vec![
+                "L'élaboration des concepts et le système des catégories chez Hegel . . . . . . 114",
+                "La culture pratique . . . . 128",
+            ]
+        );
+    }
+
+    #[test]
+    fn raccord_jamais_apres_une_entree_a_points_de_conduite() {
+        let blocs = vec![
+            para("Les pouvoirs de la mère pendant la gestation . . . 209", 205, 0.8),
+            para("L'association Fraternité Blanche Universelle", 206, 0.1),
+        ];
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new()).len(), 2);
+        // Un numéro sans points de conduite ne bloque pas le raccord (texte seul).
+        let blocs = vec![para("les conférences de 1903", 5, 0.8), para("suite", 6, 0.1)];
+        assert_eq!(raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new()).len(), 1);
     }
 
     #[test]
