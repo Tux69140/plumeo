@@ -106,11 +106,18 @@ fn enumeration(texte: &str) -> Option<Enumeration> {
     Some(if c.get(1).is_some() { Enumeration::Chiffres } else { Enumeration::Romains })
 }
 
-/// Points de conduite (au moins 3 points, espacés ou non, ou une ellipse) suivis d'un
-/// numéro de page en fin de texte. « l 07 », « I07 »… y comptent comme un numéro
-/// (OCR de « 107 »).
+/// Fragment de motif : points de conduite (au moins 3 points, espacés ou non, ou une
+/// ellipse) suivis d'un numéro de page. « l 07 », « I07 »… y comptent comme un numéro
+/// (OCR de « 107 »). Groupes nommés : `page` (numéro lu tel quel) ou `ocr` (chiffres
+/// après « l » ou « I », à lire précédés d'un 1). Partagé par `finit_par_points_de_conduite`
+/// et par les motifs du numéro de page des sommaires (`titres`), qui ne doivent pas
+/// diverger.
+pub(crate) const POINTS_DE_CONDUITE_ET_NUMERO: &str =
+    r"(?:(?:\.\s*){3,}|\u{2026}\s*)(?:(?P<page>\d{1,4})|[lI]\s?(?P<ocr>\d{1,3}))";
+
+/// Points de conduite et numéro de page en fin de texte.
 static ENTREE_A_POINTS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?:(?:\.\s*){3,}|\u{2026}\s*)(?:\d{1,4}|[lI]\s?\d{1,3})\s*$").unwrap());
+    LazyLock::new(|| Regex::new(&format!(r"{POINTS_DE_CONDUITE_ET_NUMERO}\s*$")).unwrap());
 
 static NUMERO_DE_PAGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d{1,4}$").unwrap());
 
@@ -130,21 +137,29 @@ const GRAND_BLANC_RELATIF: f32 = 3.0;
 /// Ligne d'entrée de sommaire : elle finit par un numéro de page précédé de points de
 /// conduite ou d'un grand blanc. Le grand blanc (écart entre le numéro et le mot
 /// précédent) dépasse `GRAND_BLANC` de la largeur du bloc et `GRAND_BLANC_RELATIF` fois
-/// le plus grand des autres écarts entre mots séparés par une espace (exposants exclus).
+/// le plus grand des autres écarts entre mots consécutifs séparés par une espace. Les
+/// exposants sont exclus partout : un écart voisin d'un exposant ne compte pas.
 fn ligne_entree(l: &Ligne, bloc: BlocTexte) -> bool {
+    let exposant = |i: &usize| l.exposants.contains(i);
+    // Le dernier mot (hors exposants) doit finir par un chiffre ; sinon, inutile de
+    // construire le texte de la ligne ou de lancer un motif.
+    let Some(dernier) = (0..l.mots.len()).rev().find(|i| !exposant(i)) else { return false };
+    if !l.mots[dernier].texte.trim_end().ends_with(|c: char| c.is_ascii_digit()) {
+        return false;
+    }
     if finit_par_points_de_conduite(&l.texte()) {
         return true;
     }
-    if l.mots.is_empty() || l.exposants.contains(&(l.mots.len() - 1)) {
+    // Grand blanc : le numéro est le dernier mot de la ligne, pas un exposant.
+    if dernier != l.mots.len() - 1 {
         return false;
     }
-    let mots: Vec<_> = l.mots.iter().enumerate().filter(|(i, _)| !l.exposants.contains(i)).map(|(_, m)| m).collect();
-    let [.., avant, numero] = mots.as_slice() else { return false };
-    let blanc = numero.rect.x0 - avant.rect.x1;
-    let autres = mots[..mots.len() - 1]
-        .windows(2)
-        .filter(|w| w[1].espace_avant)
-        .map(|w| w[1].rect.x0 - w[0].rect.x1)
+    let Some(avant) = (0..dernier).rev().find(|i| !exposant(i)) else { return false };
+    let numero = &l.mots[dernier];
+    let blanc = numero.rect.x0 - l.mots[avant].rect.x1;
+    let autres = (1..=avant)
+        .filter(|&i| !exposant(&(i - 1)) && !exposant(&i) && l.mots[i].espace_avant)
+        .map(|i| l.mots[i].rect.x0 - l.mots[i - 1].rect.x1)
         .fold(0.0_f32, f32::max);
     NUMERO_DE_PAGE.is_match(numero.texte.trim())
         && blanc > GRAND_BLANC * (bloc.x1 - bloc.x0)
@@ -822,11 +837,72 @@ mod tests {
     }
 
     #[test]
-    fn numero_lu_l_07_apres_des_points_de_conduite() {
+    fn ligne_finie_par_l_07_apres_des_points_de_conduite_est_une_entree() {
         for fin in ["l 07", "l07", "I 07", "I07"] {
             let texte = format!("Le miracle des deux poissons et des cinq pains . . . . {fin}");
             assert!(ligne_entree(&ligne_reguliere(&texte, 0.1, 0.9, 0.1), BLOC), "{texte}");
         }
+    }
+
+    #[test]
+    fn pas_de_points_de_conduite_sans_points_ou_sans_numero_final() {
+        // Ellipse au milieu de la ligne, sans numéro final.
+        assert!(!finit_par_points_de_conduite("Il a dit\u{2026} puis il est reparti"));
+        assert!(!finit_par_points_de_conduite("Il a dit\u{2026} puis il est reparti 12 fois."));
+        // Points de conduite sans numéro.
+        assert!(!finit_par_points_de_conduite("Douceur et humilité . . . . ."));
+        assert!(!finit_par_points_de_conduite("Douceur et humilité ......"));
+        // Numéro sans points de conduite.
+        assert!(!finit_par_points_de_conduite("Notes 175"));
+        assert!(!finit_par_points_de_conduite("Il a dit... puis il est reparti en 1903"));
+    }
+
+    #[test]
+    fn exposant_apres_des_points_de_conduite_n_est_pas_un_numero_de_page() {
+        // « Douceur . . . . » suivi d'un appel de note « 12 » en exposant : le dernier mot
+        // (hors exposants) ne finit pas par un chiffre.
+        let mut l = ligne_reguliere("Douceur . . . . 12", 0.1, 0.9, 0.1);
+        let dernier = l.mots.len() - 1;
+        l.mots[dernier].espace_avant = false;
+        l.exposants = vec![dernier];
+        assert!(!ligne_entree(&l, BLOC));
+    }
+
+    /// Ligne de mots de largeur 0,07 séparés de 0,01, avec l'appel de note `exposant`
+    /// (texte, largeur) collé à « conférence, » s'il est donné, puis « 7 » en x = 0,76.
+    fn ligne_de_conference(exposant: Option<(&str, f32)>) -> Ligne {
+        let mut mots = Vec::new();
+        let mut exposants = Vec::new();
+        let mut x = 0.1;
+        for texte in ["Première", "conférence,", "Berlin,", "27", "novembre", "1903"] {
+            mots.push(mot(texte, x, x + 0.07, 0.10, 12.0, false, false));
+            x += 0.07;
+            if let (Some((appel, largeur)), "conférence,") = (exposant, texte) {
+                let mut m = mot(appel, x, x + largeur, 0.10, 8.0, false, false);
+                m.espace_avant = false;
+                exposants.push(mots.len());
+                mots.push(m);
+                x += largeur;
+            }
+            x += 0.01;
+        }
+        mots.push(mot("7", 0.76, 0.78, 0.10, 12.0, false, false));
+        let mut l = ligne_de_mots(mots);
+        l.exposants = exposants;
+        l
+    }
+
+    #[test]
+    fn exposant_au_milieu_de_la_ligne_ne_change_pas_la_decision() {
+        // Blanc de 0,19 avant « 7 », autres écarts de 0,01 : entrée de sommaire.
+        let sans = ligne_de_conference(None);
+        assert!(ligne_entree(&sans, BLOC));
+        // Un appel de note large (0,05) après « conférence, » réduit le blanc à 0,14 ;
+        // l'écart entre ses voisins (0,06, plus du tiers du blanc) ne compte pas : la
+        // ligne reste une entrée.
+        let avec = ligne_de_conference(Some(("12", 0.05)));
+        assert_eq!(avec.texte(), "Première conférence,12 Berlin, 27 novembre 1903 7");
+        assert!(ligne_entree(&avec, BLOC));
     }
 
     #[test]

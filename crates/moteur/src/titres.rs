@@ -11,6 +11,7 @@ use unicode_normalization::char::is_combining_mark;
 use crate::blocs::{Bloc, Paragraphe, Segment};
 use crate::markdown::AncresTitres;
 use crate::modele::{Ancre, Moitie, Signet};
+use crate::paragraphes::POINTS_DE_CONDUITE_ET_NUMERO;
 use crate::points::{GenrePoint, PointAVerifier};
 use crate::reglages::SourceTitres;
 use crate::zones::{Retrait, Role};
@@ -179,16 +180,17 @@ fn paragraphe_titre_plausible(p: &Paragraphe) -> bool {
     titre_plausible(&texte)
 }
 
-/// Numéro de page en fin de paragraphe, après une espace ou des points de conduite.
-/// Après des points de conduite, « l 07 » ou « I07 » se lit 107 (OCR).
+/// Numéro de page en fin de paragraphe, après une espace ou des points de conduite
+/// (`POINTS_DE_CONDUITE_ET_NUMERO`). Après des points de conduite, « l 07 » ou « I07 »
+/// se lit 107 (OCR).
 static NUMERO_DE_PAGE_FINAL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:(?:\.\s*){3,}|\u{2026}\s*)[lI]\s?(\d{1,3})$|[\s.\u{2026}](\d{1,4})$").expect("motif valide")
+    Regex::new(&format!(r"{POINTS_DE_CONDUITE_ET_NUMERO}$|[\s.\u{{2026}}](?P<nombre>\d{{1,4}})$")).expect("motif valide")
 });
 
 /// Numéro de page qui finit le texte d'une ligne de sommaire, s'il y en a un.
 fn numero_de_page_final(texte: &str) -> Option<u32> {
     let c = NUMERO_DE_PAGE_FINAL.captures(texte)?;
-    match (c.get(1), c.get(2)) {
+    match (c.name("ocr"), c.name("page").or_else(|| c.name("nombre"))) {
         (Some(ocr), _) => format!("1{}", ocr.as_str()).parse().ok(),
         (None, Some(n)) => n.as_str().parse().ok(),
         _ => None,
@@ -197,14 +199,19 @@ fn numero_de_page_final(texte: &str) -> Option<u32> {
 
 /// Une (demi-)page, faite des paragraphes donnés dans l'ordre de lecture (numéro de page
 /// final, paragraphe court), est-elle un sommaire ? Il faut au moins 4 paragraphes
-/// numérotés, et soit qu'ils fassent au moins la moitié des paragraphes, soit que leurs
-/// numéros soient croissants et que tous les paragraphes soient courts (entrées suivies
-/// de lignes de titre, en-têtes de partie).
-fn moitie_de_sommaire(paragraphes: &[(Option<u32>, bool)]) -> bool {
+/// numérotés, et soit qu'ils fassent au moins la moitié des paragraphes, soit que tous
+/// les paragraphes soient courts (entrées suivies de lignes de titre, en-têtes de partie)
+/// et que leurs numéros soient croissants (égalités admises : deux entrées sur la même
+/// page) et plausibles comme numéros de page : au plus 2 × `derniere_page` + 20 (une
+/// chronologie, « 1903 », « 1908 », n'est pas un sommaire).
+fn moitie_de_sommaire(paragraphes: &[(Option<u32>, bool)], derniere_page: u32) -> bool {
     let numeros: Vec<u32> = paragraphes.iter().filter_map(|(n, _)| *n).collect();
+    let plausible = |n: &u32| *n <= 2 * derniere_page + 20;
     numeros.len() >= 4
         && (numeros.len() * 2 >= paragraphes.len()
-            || (numeros.windows(2).all(|w| w[1] >= w[0]) && paragraphes.iter().all(|(_, court)| *court)))
+            || (numeros.windows(2).all(|w| w[1] >= w[0])
+                && numeros.iter().all(plausible)
+                && paragraphes.iter().all(|(_, court)| *court)))
 }
 
 /// (Demi-)pages qui ressemblent à un sommaire (`moitie_de_sommaire`) : leurs paragraphes
@@ -222,9 +229,10 @@ fn moities_sommaire(blocs: &[Bloc]) -> HashSet<(u32, Moitie)> {
                 .push((numero_de_page_final(texte), court(p, texte)));
         }
     }
+    let derniere_page = blocs.iter().map(|b| b.ancre().page).max().unwrap_or(0);
     par_moitie
         .into_iter()
-        .filter(|(_, paragraphes)| moitie_de_sommaire(paragraphes))
+        .filter(|(_, paragraphes)| moitie_de_sommaire(paragraphes, derniere_page))
         .map(|(moitie, _)| moitie)
         .collect()
 }
@@ -1267,10 +1275,10 @@ pub fn placer_titre_livre(mut blocs: Vec<Bloc>, titre_livre: &str) -> Vec<Bloc> 
 }
 
 /// Numéro de page en fin d'entrée de sommaire, après une espace ou des points de conduite ;
-/// après des points de conduite, aussi « l 07 », « I07 »… (OCR de « 107 »).
+/// après des points de conduite, aussi « l 07 », « I07 »… (OCR de « 107 »,
+/// `POINTS_DE_CONDUITE_ET_NUMERO`).
 static NUMERO_FINAL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:[\s.\u{2026}]+\d{1,4}|(?:\s*\.){3,}\s*[lI]\s?\d{1,3}|\s*\u{2026}\s*[lI]\s?\d{1,3})\s*$")
-        .expect("motif valide")
+    Regex::new(&format!(r"(?:[\s.\u{{2026}}]+\d{{1,4}}|\s*{POINTS_DE_CONDUITE_ET_NUMERO})\s*$")).expect("motif valide")
 });
 
 /// Titres d'un sommaire imprimé (paragraphe placé juste avant la première entrée).
@@ -2835,8 +2843,8 @@ mod tests {
         Bloc::Paragraphe(p)
     }
 
-    /// Page 3 : moitié gauche de texte courant, moitié droite de 10 lignes courtes dont
-    /// 4 finissent par les `numeros` donnés.
+    /// Page 3 d'un livre de 80 pages : moitié gauche de texte courant, moitié droite de
+    /// 10 lignes courtes dont 4 finissent par les `numeros` donnés.
     fn demi_page_de_sommaire(numeros: [u32; 4]) -> Vec<Bloc> {
         let mut blocs: Vec<Bloc> = (0..3).map(|_| para_moitie(3, Moitie::Gauche, &texte_long(), 5)).collect();
         blocs.push(para_moitie(3, Moitie::Droite, "CONNAISSANCE", 1));
@@ -2845,18 +2853,45 @@ mod tests {
             blocs.push(para_moitie(3, Moitie::Droite, "Les bases d'une théorie de la connaissance", 1));
         }
         blocs.push(para_moitie(3, Moitie::Droite, "LOGIQUE", 1));
+        blocs.push(para_moitie(80, Moitie::Gauche, &texte_long(), 5));
         blocs
     }
 
     #[test]
     fn demi_page_de_lignes_courtes_aux_numeros_croissants() {
         assert_eq!(pages_sommaire(&demi_page_de_sommaire([7, 23, 40, 58])), BTreeSet::from([3]));
+        // Égalités admises : deux entrées sur la même page.
+        assert_eq!(pages_sommaire(&demi_page_de_sommaire([7, 23, 23, 58])), BTreeSet::from([3]));
         // Numéros décroissants : pas un sommaire.
         assert!(pages_sommaire(&demi_page_de_sommaire([58, 40, 23, 7])).is_empty());
         // Un paragraphe long dans la moitié : pas un sommaire.
         let mut blocs = demi_page_de_sommaire([7, 23, 40, 58]);
         blocs.push(para_moitie(3, Moitie::Droite, &texte_long(), 5));
         assert!(pages_sommaire(&blocs).is_empty());
+    }
+
+    #[test]
+    fn annees_croissantes_ne_font_pas_un_sommaire() {
+        // Chronologie : lignes courtes finies par des années croissantes, dans un livre de
+        // 80 pages (numéros plausibles jusqu'à 2 × 80 + 20 = 180).
+        assert!(pages_sommaire(&demi_page_de_sommaire([1903, 1905, 1908, 1910])).is_empty());
+        // Borne incluse : 180 est plausible, 181 ne l'est plus.
+        assert_eq!(pages_sommaire(&demi_page_de_sommaire([7, 23, 40, 180])), BTreeSet::from([3]));
+        assert!(pages_sommaire(&demi_page_de_sommaire([7, 23, 40, 181])).is_empty());
+    }
+
+    #[test]
+    fn numero_l_07_lu_107_apres_des_points_de_conduite() {
+        for fin in ["l 07", "I07", "l07", "I 07"] {
+            let texte = format!("Le miracle des deux poissons . . . . {fin}");
+            assert_eq!(numero_de_page_final(&texte), Some(107), "{texte}");
+            let texte = format!("Le miracle des deux poissons \u{2026} {fin}");
+            assert_eq!(numero_de_page_final(&texte), Some(107), "{texte}");
+        }
+        // Sans points de conduite, « l07 » n'est pas un numéro.
+        assert_eq!(numero_de_page_final("Le miracle l07"), None);
+        assert_eq!(numero_de_page_final("Douceur . . . . 11"), Some(11));
+        assert_eq!(numero_de_page_final("Notes 175"), Some(175));
     }
 
     #[test]
