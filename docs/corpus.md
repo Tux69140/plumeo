@@ -220,9 +220,9 @@ for n in "omraam/pdf/Aïvanhov, Omraam Mikhaël - Approche de la Cité céleste.
          "omraam/pdf/L’alchimie_spirituelle_Tome_2_Omraam_Mikhaël_Aïvanhov.pdf:prosveta-scan" \
          "steiner/pdf/Steiner Rudolf - Connaissance Logique Pensée pratique.pdf:omnipage-double"; do
   cargo run --release -p plumeo-cli -- convertir "/home/stef/Documents/RAG/${n%%:*}" \
-    --serie "tests/corpus/series/${n##*:}.json" --sortie /tmp/plumeo-corpus-out
+    --serie "tests/corpus/series/${n##*:}.json" --sortie plumeo-controle
 done
-flatpak run com.github.johnfactotum.Foliate /tmp/plumeo-corpus-out/<fichier>.epub
+flatpak run com.github.johnfactotum.Foliate plumeo-controle/<fichier>.epub
 ```
 
 Points à vérifier : la table des matières ; une note qui s'ouvre puis le retour ↩

@@ -2,3 +2,6 @@ target/
 vendor/
 *.pdf
 *.epub
+
+# EPUB et sorties de contrôle produits en local (jamais versionnés)
+/plumeo-controle/
