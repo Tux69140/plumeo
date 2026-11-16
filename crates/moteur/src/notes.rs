@@ -406,7 +406,7 @@ fn ouvre_section_implicite(blocs: &[Bloc], i: usize, portee: &[Bloc]) -> bool {
 /// La (demi-)page `page` porte-t-elle un paragraphe qui ouvre une note, parmi `blocs` ?
 fn page_a_marqueur(blocs: &[Bloc], page: (u32, Moitie)) -> bool {
     blocs.iter().any(|b| match b {
-        Bloc::Paragraphe(p) => (p.ancre.page, p.ancre.moitie) == page && extraire_marqueur(&p.segments).is_some(),
+        Bloc::Paragraphe(p) => p.ancre.demi_page() == page && extraire_marqueur(&p.segments).is_some(),
         _ => false,
     })
 }

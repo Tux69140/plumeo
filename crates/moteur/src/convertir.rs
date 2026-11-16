@@ -15,7 +15,7 @@ use crate::paragraphes::{Vocabulaire, mesurer_bloc, nettoyer_sauts, page_courte,
 use crate::pdf::DocumentPdf;
 use crate::points::{GenrePoint, PointAVerifier};
 use crate::reglages::{ReglagesSerie, SourceTitres};
-use crate::titres::{detecter_titres, placer_titre_livre, sommaire_cliquable};
+use crate::titres::{TitresDetectes, detecter_titres, placer_titre_livre, sommaire_cliquable};
 use crate::zones::{PageClassee, Retrait, Role, classer_lignes};
 
 #[derive(Debug, Serialize)]
@@ -131,8 +131,14 @@ pub fn convertir_livre(
     }
 
     let source = forcer_titres.unwrap_or(reglages.titres);
-    let (blocs, pts, source_titres, retraits_titres, illisibles, mut sommaires) =
-        detecter_titres(blocs, &doc.signets(), nb_pages, source);
+    let TitresDetectes {
+        blocs,
+        points: pts,
+        source: source_titres,
+        retraits: retraits_titres,
+        illisibles,
+        mut sommaires,
+    } = detecter_titres(blocs, &doc.signets(), nb_pages, source);
     points.extend(pts);
     retraits.extend(retraits_titres);
     // Avant le raccord des pages (le titre ne s'y recolle pas) et le nettoyage des

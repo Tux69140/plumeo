@@ -185,7 +185,8 @@ fn paragraphe_titre_plausible(p: &Paragraphe) -> bool {
 /// (`POINTS_DE_CONDUITE_ET_NUMERO`). Après des points de conduite, « l 07 » ou « I07 »
 /// se lit 107 (OCR).
 static NUMERO_DE_PAGE_FINAL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(r"{POINTS_DE_CONDUITE_ET_NUMERO}$|[\s.\u{{2026}}](?P<nombre>\d{{1,4}})$")).expect("motif valide")
+    Regex::new(&format!(r"{POINTS_DE_CONDUITE_ET_NUMERO}$|[\s.\u{{2026}}](?P<nombre>\d{{1,4}})$"))
+        .expect("motif valide")
 });
 
 /// Numéro de page qui finit le texte d'une ligne de sommaire, s'il y en a un.
@@ -217,25 +218,53 @@ fn moitie_de_sommaire(paragraphes: &[(Option<u32>, bool)], derniere_page: u32) -
 
 /// (Demi-)pages qui ressemblent à un sommaire (`moitie_de_sommaire`) : leurs paragraphes
 /// finissent par un numéro de page, après une espace ou des points de conduite. Des
-/// points de suspension au milieu du texte ne suffisent pas.
+/// points de suspension au milieu du texte ne suffisent pas. Comme dans
+/// `sommaire_cliquable`, la (demi-)page qui précède directement une (demi-)page de
+/// sommaire (dans l'ordre de lecture, parmi celles qui portent des paragraphes : p3g
+/// avant p3d) en est aussi une si elle porte au moins un paragraphe numéroté et si tous
+/// ses paragraphes sont courts (le titre « Table des matières » ou « Sommaire » l'est) ;
+/// la remontée va de proche en proche, mais jamais au-delà d'une (demi-)page qui porte
+/// le titre du sommaire (`est_titre_de_sommaire`).
 fn moities_sommaire(blocs: &[Bloc]) -> BTreeSet<DemiPage> {
-    let mut par_moitie: HashMap<DemiPage, Vec<(Option<u32>, bool)>> = HashMap::new();
+    // Par (demi-)page, dans l'ordre de lecture : (numéro de page final, court) par
+    // paragraphe.
+    let mut par_moitie: BTreeMap<DemiPage, Vec<(Option<u32>, bool)>> = BTreeMap::new();
+    let mut titrees: HashSet<DemiPage> = HashSet::new();
     for bloc in blocs {
         if let Bloc::Paragraphe(p) = bloc {
             let texte = p.texte_brut();
             let texte = texte.trim();
-            par_moitie
-                .entry(p.ancre.demi_page())
-                .or_default()
-                .push((numero_de_page_final(texte), court(p, texte)));
+            let lieu = p.ancre.demi_page();
+            if est_titre_de_sommaire(texte) {
+                titrees.insert(lieu);
+            }
+            par_moitie.entry(lieu).or_default().push((numero_de_page_final(texte), court(p, texte)));
         }
     }
     let derniere_page = blocs.iter().map(|b| b.ancre().page).max().unwrap_or(0);
-    par_moitie
-        .into_iter()
-        .filter(|(_, paragraphes)| moitie_de_sommaire(paragraphes, derniere_page))
-        .map(|(moitie, _)| moitie)
-        .collect()
+    let lieux: Vec<DemiPage> = par_moitie.keys().copied().collect();
+    let mut sommaire: Vec<bool> =
+        lieux.iter().map(|lieu| moitie_de_sommaire(&par_moitie[lieu], derniere_page)).collect();
+    for r in (0..lieux.len().saturating_sub(1)).rev() {
+        let (lieu, suivante) = (lieux[r], lieux[r + 1]);
+        let paragraphes = &par_moitie[&lieu];
+        if !sommaire[r]
+            && sommaire[r + 1]
+            && contigues(lieu, suivante)
+            && !titrees.contains(&suivante)
+            && paragraphes.iter().any(|(numero, _)| numero.is_some())
+            && paragraphes.iter().all(|(_, court)| *court)
+        {
+            sommaire[r] = true;
+        }
+    }
+    lieux.into_iter().zip(sommaire).filter(|(_, sommaire)| *sommaire).map(|(lieu, _)| lieu).collect()
+}
+
+/// La (demi-)page `b`, qui suit `a` parmi les (demi-)pages qui portent des paragraphes,
+/// la suit-elle directement : même page ou page suivante ?
+fn contigues(a: DemiPage, b: DemiPage) -> bool {
+    b.0 <= a.0 + 1
 }
 
 /// Le bloc est-il un paragraphe d'une (demi-)page de `sommaires` ?
@@ -1190,8 +1219,9 @@ fn texte_entree(textes: &[&str]) -> String {
 /// cherché : l'entrée suivante absorbera le numéro du corps. Un sommaire de
 /// la première moitié du livre est cherché à partir de la (demi-)page qui suit sa
 /// dernière (demi-)page dans l'ordre de lecture (p3d après un sommaire fini en p3g), un
-/// sommaire de fin à partir de la page 1 ; ensuite, chaque entrée à partir de la page de
-/// la précédente retrouvée. Un paragraphe du corps ne sert qu'une fois.
+/// sommaire de fin à partir de la page 1 ; ensuite, chaque entrée à partir de la
+/// (demi-)page de la précédente retrouvée (p5d après une entrée retrouvée en p5d : la p5g
+/// n'est plus cherchée). Un paragraphe du corps ne sert qu'une fois.
 /// Renvoie, par entrée retrouvée, un pseudo-signet de niveau 1 à sa page, avec sa
 /// correspondance (`trouve`) dans `blocs`. Le numéro seul qui précède une correspondance
 /// (`numero_seul_avant`) est absorbé (`numero_avant`) s'il suit les numéros absorbés
@@ -1252,7 +1282,7 @@ fn entrees_du_sommaire(
                 Some((n, entree, debut, fin_bloc)) => {
                     let page = blocs[debut].ancre().page;
                     utilises.extend(debut..fin_bloc);
-                    depart = (page, Moitie::Entiere);
+                    depart = blocs[debut].ancre().demi_page();
                     retrouves.push((Signet { titre: entree, niveau: 1, page }, debut, fin_bloc));
                     k += n;
                 }
@@ -1277,13 +1307,27 @@ fn entrees_du_sommaire(
         .collect()
 }
 
+/// Résultat de `detecter_titres`.
+pub struct TitresDetectes {
+    /// Blocs, avec leurs titres.
+    pub blocs: Vec<Bloc>,
+    /// Points à vérifier : un point `Sommaire` par page, ancré à sa première moitié de
+    /// sommaire, et ceux de la détection des titres.
+    pub points: Vec<PointAVerifier>,
+    /// Source des titres réellement utilisée.
+    pub source: SourceTitres,
+    /// Titres courants retirés.
+    pub retraits: Vec<Retrait>,
+    /// Ancres des candidats refusés comme illisibles : paragraphes qui ne doivent pas être
+    /// raccordés d'une page à l'autre.
+    pub illisibles: HashSet<Ancre>,
+    /// (Demi-)pages de sommaire.
+    pub sommaires: BTreeSet<DemiPage>,
+}
+
 /// Détecte les titres selon `source` (ou la cascade en mode `Auto`) et les (demi-)pages
-/// de sommaire. Retourne les blocs, les points à vérifier (un point `Sommaire` par page,
-/// ancré à sa première moitié de sommaire), la source réellement utilisée, les retraits,
-/// les ancres des candidats refusés comme illisibles (paragraphes qui ne doivent pas être
-/// raccordés d'une page à l'autre) et les (demi-)pages de sommaire. Une (demi-)page de
-/// sommaire n'apporte ni titre ni cible de recherche ; l'autre moitié de sa page double
-/// reste une page ordinaire.
+/// de sommaire (voir `TitresDetectes`). Une (demi-)page de sommaire n'apporte ni titre ni
+/// cible de recherche ; l'autre moitié de sa page double reste une page ordinaire.
 /// Les signets d'appel de note (« [12] ») sont ignorés. Sans signets, un résumé sans
 /// numéros de page compte comme sommaire et ses entrées « CHAPITRE n » donnent les
 /// titres de niveau 1 du corps ; à défaut, les entrées d'un sommaire imprimé à numéros
@@ -1296,7 +1340,7 @@ pub fn detecter_titres(
     signets: &[Signet],
     nb_pages: u32,
     source: SourceTitres,
-) -> (Vec<Bloc>, Vec<PointAVerifier>, SourceTitres, Vec<Retrait>, HashSet<Ancre>, BTreeSet<DemiPage>) {
+) -> TitresDetectes {
     // Les signets « [12] » mènent aux notes de fin (Calibre) : ni titres, ni plan.
     let appel_de_note = Regex::new(r"^\[\d+\]$").unwrap();
     let signets: Vec<Signet> = signets.iter().filter(|s| !appel_de_note.is_match(s.titre.trim())).cloned().collect();
@@ -1397,7 +1441,7 @@ pub fn detecter_titres(
         }
     };
     points.extend(titres_courants_suspects(&blocs));
-    (blocs, points, effective, retraits, illisibles, pages_som)
+    TitresDetectes { blocs, points, source: effective, retraits, illisibles, sommaires: pages_som }
 }
 
 /// Titre du livre en tête du Markdown (titre de niveau 1). Il est cherché, comme un
@@ -1615,7 +1659,12 @@ struct SommairesReconnus {
 /// d'un paragraphe et couvre ceux que permet `paragraphes_d_entree` ; la plus longue qui
 /// vise un titre après la (demi-)page l'emporte, à défaut la plus longue qui en vise un.
 /// Les paragraphes qu'elle couvre ne sont pas essayés comme début d'une autre.
-fn entrees_de_la_page(blocs: &[Bloc], cibles: &TitresCibles, lieu: DemiPage, paragraphes: &[usize]) -> Vec<EntreeReconnue> {
+fn entrees_de_la_page(
+    blocs: &[Bloc],
+    cibles: &TitresCibles,
+    lieu: DemiPage,
+    paragraphes: &[usize],
+) -> Vec<EntreeReconnue> {
     let mut entrees = Vec::new();
     let mut k = 0;
     while k < paragraphes.len() {
@@ -1660,12 +1709,6 @@ fn lire_pages(blocs: &[Bloc], cibles: &TitresCibles) -> Vec<PageLue> {
     pages
 }
 
-/// La (demi-)page de rang `b` suit-elle directement celle de rang `a` (rangs consécutifs) :
-/// même page ou page suivante ?
-fn contigues(pages: &[PageLue], a: usize, b: usize) -> bool {
-    pages[b].lieu.0 <= pages[a].lieu.0 + 1
-}
-
 /// Marque les (demi-)pages de sommaire. Critère principal : au moins 3 entrées et au moins
 /// la moitié des paragraphes couverts. Suite : la (demi-)page qui suit directement une
 /// (demi-)page de sommaire en est une si tous ses paragraphes sont couverts. Précédente :
@@ -1675,7 +1718,7 @@ fn contigues(pages: &[PageLue], a: usize, b: usize) -> bool {
 /// en proche, mais jamais au-delà d'une (demi-)page qui s'ouvre sur le titre du sommaire.
 fn marquer_sommaires(pages: &mut [PageLue], blocs: &[Bloc]) {
     for r in 0..pages.len() {
-        let suite = r.checked_sub(1).is_some_and(|a| pages[a].sommaire && contigues(pages, a, r));
+        let suite = r.checked_sub(1).is_some_and(|a| pages[a].sommaire && contigues(pages[a].lieu, pages[r].lieu));
         let page = &pages[r];
         let couverts = page.nb_couverts();
         pages[r].sommaire = (page.entrees.len() >= MIN_TITRES_NIVEAU && couverts * 2 >= page.paragraphes.len())
@@ -1685,7 +1728,7 @@ fn marquer_sommaires(pages: &mut [PageLue], blocs: &[Bloc]) {
         let page = &pages[r];
         if page.sommaire
             || !pages[r + 1].sommaire
-            || !contigues(pages, r, r + 1)
+            || !contigues(page.lieu, pages[r + 1].lieu)
             || page.entrees.is_empty()
             || pages[r + 1].ouvre_le_sommaire(blocs)
         {
@@ -1701,32 +1744,22 @@ fn marquer_sommaires(pages: &mut [PageLue], blocs: &[Bloc]) {
     }
 }
 
-/// Suites maximales de (demi-)pages de sommaire contiguës (rangs dans `pages`), où l'on
-/// cherche le titre de chaque sommaire (avant la première entrée de la suite).
-fn suites_de_sommaire(pages: &[PageLue]) -> Vec<Range<usize>> {
+/// Suites maximales de (demi-)pages de sommaire (rangs dans `pages`) de rangs consécutifs
+/// et `voisines` deux à deux (`voisines(a, b)` : rangs `a` puis `b = a + 1`). Seules les
+/// (demi-)pages qui portent des paragraphes ont un rang. Deux usages :
+/// - `contigues` (même page ou page suivante) : sommaires où l'on cherche le titre de
+///   chacun (avant la première entrée de la suite) ;
+/// - toujours voisines : sommaires pour le suivi des homonymes ; une page vide ne coupe
+///   pas un sommaire, mais le corps du livre sépare deux sommaires.
+fn suites_de_sommaire(pages: &[PageLue], voisines: impl Fn(usize, usize) -> bool) -> Vec<Range<usize>> {
     let mut suites: Vec<Range<usize>> = Vec::new();
     for r in (0..pages.len()).filter(|&r| pages[r].sommaire) {
         match suites.last_mut() {
-            Some(suite) if suite.end == r && contigues(pages, r - 1, r) => suite.end = r + 1,
+            Some(suite) if suite.end == r && voisines(r - 1, r) => suite.end = r + 1,
             _ => suites.push(r..r + 1),
         }
     }
     suites
-}
-
-/// Sommaires du livre pour le suivi des homonymes : suites maximales de (demi-)pages de
-/// sommaire de rangs consécutifs dans `pages` (rangs). Seules les (demi-)pages qui portent
-/// des paragraphes ont un rang : une page vide ne coupe pas un sommaire, mais le corps du
-/// livre sépare deux sommaires.
-fn groupes_d_homonymes(pages: &[PageLue]) -> Vec<Range<usize>> {
-    let mut groupes: Vec<Range<usize>> = Vec::new();
-    for r in (0..pages.len()).filter(|&r| pages[r].sommaire) {
-        match groupes.last_mut() {
-            Some(groupe) if groupe.end == r => groupe.end = r + 1,
-            _ => groupes.push(r..r + 1),
-        }
-    }
-    groupes
 }
 
 /// Reconnaissance des sommaires imprimés de `blocs` (voir `sommaire_cliquable`) : leurs
@@ -1735,11 +1768,12 @@ fn reconnaitre_sommaires(blocs: &[Bloc], titre_livre: &str) -> SommairesReconnus
     let cibles = TitresCibles::new(blocs, titre_livre);
     let mut pages = lire_pages(blocs, &cibles);
     marquer_sommaires(&mut pages, blocs);
-    let suites = suites_de_sommaire(&pages);
+    let suites = suites_de_sommaire(&pages, |a, b| contigues(pages[a].lieu, pages[b].lieu));
 
     // Entrées des (demi-)pages de sommaire, dans l'ordre des blocs, avec leur groupe
-    // (rang dans `groupes_d_homonymes`) et leur (demi-)page.
-    let mut a_lier: Vec<(usize, &EntreeReconnue, DemiPage)> = groupes_d_homonymes(&pages)
+    // (rang parmi les suites de rangs consécutifs, `suites_de_sommaire`) et leur
+    // (demi-)page.
+    let mut a_lier: Vec<(usize, &EntreeReconnue, DemiPage)> = suites_de_sommaire(&pages, |_, _| true)
         .into_iter()
         .enumerate()
         .flat_map(|(groupe, rangs)| pages[rangs].iter().map(move |page| (groupe, page)))
@@ -1845,7 +1879,8 @@ fn lier_les_entrees(mut blocs: Vec<Bloc>, reconnus: &SommairesReconnus) -> Vec<B
             let Bloc::Paragraphe(p) = autre else { unreachable!("entrée faite de paragraphes") };
             joindre_a_l_entree(&mut entree, p);
         }
-        sortie.push(Bloc::EntreeSommaire { segments: entree.segments, cible: ids[&liee.titre].clone(), ancre: entree.ancre });
+        let cible = ids[&liee.titre].clone();
+        sortie.push(Bloc::EntreeSommaire { segments: entree.segments, cible, ancre: entree.ancre });
     }
     sortie
 }
@@ -1871,7 +1906,7 @@ fn lier_les_entrees(mut blocs: Vec<Bloc>, reconnus: &SommairesReconnus) -> Vec<B
 ///
 /// Le titre visé est le premier de ce texte après la (demi-)page de l'entrée, à défaut le
 /// premier du livre, en sautant les titres déjà visés par une entrée précédente du même
-/// sommaire (`groupes_d_homonymes` : une page vide ne le coupe pas) tant qu'il en reste
+/// sommaire (`suites_de_sommaire` : une page vide ne le coupe pas) tant qu'il en reste
 /// un libre (titres homonymes visés dans l'ordre, dans chaque sommaire) ; le titre du
 /// livre (premier titre de niveau 1, s'il porte `titre_livre`) n'est jamais visé. Chaque
 /// entrée devient une seule `EntreeSommaire` qui garde tout le texte de ses paragraphes,
@@ -1955,7 +1990,7 @@ mod tests {
     fn titre_depuis_signet() {
         let blocs = vec![corps(2, &texte_long()), para(3, "1. VISITE À PATMOS", 12.0, false, 1), corps(3, &texte_long())];
         let signets = [signet("1. VISITE À PATMOS", 1, 3), signet("B", 1, 5), signet("C", 1, 7)];
-        let (blocs, _, source, _, _, _) = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, source, .. } = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
         assert_eq!(source, SourceTitres::Signets);
         assert_eq!(titres(&blocs)[0], (1, "1. VISITE À PATMOS".to_string()));
         assert_eq!(blocs.len(), 3 + 2); // deux titres insérés pour B et C
@@ -1969,7 +2004,7 @@ mod tests {
             corps(4, &texte_long()),
         ];
         let signets = [signet("LE SENS DE L’AMOUR DANS LE MONDE", 1, 4)];
-        let (blocs, points, _, _, _, _) = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, points, .. } = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
         assert_eq!(titres(&blocs), vec![(1, "LE SENS DE L’AMOUR DANS LE MONDE".to_string())]);
         assert_eq!(blocs.len(), 2);
         assert!(points.is_empty());
@@ -1986,7 +2021,7 @@ mod tests {
             corps(22, &texte_long()),
         ];
         let signets = [signet("3. MELKHITSÉDEK ET L’ENSEIGNEMENT DES DEUX PRINCIPES", 1, 22)];
-        let (blocs, points, _, _, _, _) = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, points, .. } = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
         assert_eq!(titres(&blocs), vec![(1, "3 MELKHITSÉDEK ET L’ENSEIGNEMENT DES DEUX PRINCIPES".to_string())]);
         assert_eq!(blocs.len(), 2);
         assert!(points.is_empty());
@@ -2004,7 +2039,7 @@ mod tests {
             corps(93, &texte_long()),
         ];
         let signets = [signet("13. LA BÊTE QUI MONTE DE LA MER ET LA BÊTE QUI MONTE DE LA TERRE", 1, 93)];
-        let (blocs, points, _, _, _, _) = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, points, .. } = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
         assert_eq!(blocs.len(), 2);
         assert!(points.is_empty());
     }
@@ -2024,7 +2059,7 @@ mod tests {
             signet("[1]", 1, 9),
             signet("[2]", 1, 9),
         ];
-        let (blocs, points, source, _, _, _) = detecter_titres(blocs, &signets, 100, SourceTitres::Auto);
+        let TitresDetectes { blocs, points, source, .. } = detecter_titres(blocs, &signets, 100, SourceTitres::Auto);
         assert_eq!(source, SourceTitres::Signets);
         let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
         assert_eq!(t, ["1. VISITE À PATMOS", "2. INTRODUCTION", "3. MELKHITSÉDEK"]);
@@ -2035,7 +2070,7 @@ mod tests {
     fn signet_introuvable() {
         let blocs = vec![corps(6, &texte_long())];
         let signets = [signet("Épilogue", 1, 6)];
-        let (blocs, points, _, _, _, _) = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, points, .. } = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
         assert!(matches!(&blocs[0], Bloc::Titre { texte, niveau: 1, .. } if texte == "Épilogue"));
         assert!(matches!(blocs[1], Bloc::Paragraphe(_)));
         assert_eq!(points.len(), 1);
@@ -2046,7 +2081,8 @@ mod tests {
     #[test]
     fn signet_court_ne_avale_pas_le_corps() {
         let blocs = vec![corps(3, "Il était une fois un livre très long."), corps(3, &texte_long())];
-        let (blocs, points, _, _, _, _) = detecter_titres(blocs, &[signet("I", 1, 3)], 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, points, .. } =
+            detecter_titres(blocs, &[signet("I", 1, 3)], 100, SourceTitres::Signets);
         assert!(matches!(&blocs[0], Bloc::Titre { texte, .. } if texte == "I"));
         assert!(matches!(blocs[1], Bloc::Paragraphe(_)));
         assert_eq!(points.len(), 1);
@@ -2056,7 +2092,8 @@ mod tests {
     fn signet_refuse_un_long_paragraphe() {
         let long = format!("Introduction de la méthode {}", vec!["mot"; 20].join(" "));
         let blocs = vec![para(3, &long, 12.0, false, 2)];
-        let (blocs, points, _, _, _, _) = detecter_titres(blocs, &[signet("Introduction", 1, 3)], 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, points, .. } =
+            detecter_titres(blocs, &[signet("Introduction", 1, 3)], 100, SourceTitres::Signets);
         assert!(matches!(&blocs[0], Bloc::Titre { texte, .. } if texte == "Introduction"));
         assert!(matches!(blocs[1], Bloc::Paragraphe(_)));
         assert_eq!(points.len(), 1);
@@ -2065,7 +2102,8 @@ mod tests {
     #[test]
     fn signet_prefere_la_correspondance_exacte() {
         let blocs = vec![para(3, "Introduction générale", 12.0, false, 1), para(3, "Introduction", 12.0, false, 1)];
-        let (blocs, points, _, _, _, _) = detecter_titres(blocs, &[signet("Introduction", 1, 3)], 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, points, .. } =
+            detecter_titres(blocs, &[signet("Introduction", 1, 3)], 100, SourceTitres::Signets);
         assert!(matches!(&blocs[0], Bloc::Paragraphe(_)));
         assert!(matches!(&blocs[1], Bloc::Titre { texte, .. } if texte == "Introduction"));
         assert!(points.is_empty());
@@ -2092,7 +2130,7 @@ mod tests {
             corps(9, &texte_long()),
         ];
         let signets = [signet("1. A", 1, 3), signet("2. B", 1, 5), signet("I", 1, 9), signet("La pierre cubique", 1, 9)];
-        let (blocs, points, _, _, _, _) = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, points, .. } = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
         let t = titres(&blocs);
         assert!(t.iter().any(|(_, x)| x == "I. La pierre cubique"), "{t:?}");
         assert!(t.iter().all(|(_, x)| x != "I" && x != "La pierre cubique"), "{t:?}");
@@ -2105,7 +2143,7 @@ mod tests {
     fn signets_numero_et_titre_dans_un_seul_paragraphe() {
         let blocs = vec![para(9, "I La pierre cubique", 19.4, true, 1), corps(9, &texte_long())];
         let signets = [signet("1. A", 1, 3), signet("2. B", 1, 5), signet("I", 1, 9), signet("La pierre cubique", 1, 9)];
-        let (blocs, points, _, _, _, _) = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, points, .. } = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
         assert!(titres(&blocs).iter().any(|(_, x)| x == "I. La pierre cubique"));
         assert_eq!(blocs.iter().filter(|b| b.ancre().page == 9).count(), 2);
         assert!(points.iter().all(|p| p.ancre.page != 9), "{points:?}");
@@ -2120,7 +2158,7 @@ mod tests {
             corps(9, &texte_long()),
         ];
         let signets = [signet("1. A", 1, 3), signet("2. B", 1, 5), signet("I", 1, 9), signet("La pierre cubique", 1, 9)];
-        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, .. } = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
         let t = titres(&blocs);
         assert!(t.iter().any(|(_, x)| x == "I. La pierre cubique et la mesure"), "{t:?}");
         assert!(t.iter().all(|(_, x)| x != "I. La pierre cubique"), "{t:?}");
@@ -2130,7 +2168,7 @@ mod tests {
     #[test]
     fn signets_romains_apres_arabes_descendent_d_un_niveau() {
         let blocs: Vec<Bloc> = plan_a_plat().iter().map(|s| para(s.page, &s.titre, 19.4, true, 1)).collect();
-        let (blocs, points, _, _, _, _) = detecter_titres(blocs, &plan_a_plat(), 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, points, .. } = detecter_titres(blocs, &plan_a_plat(), 100, SourceTitres::Signets);
         assert_eq!(
             titres(&blocs),
             vec![
@@ -2158,7 +2196,7 @@ mod tests {
             signet("Trois", 1, 11),
         ];
         let blocs = vec![corps(1, &texte_long())];
-        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, .. } = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
         let niveaux: Vec<(u8, String)> = titres(&blocs);
         let attendu = [
             (1, "1. A"),
@@ -2177,14 +2215,16 @@ mod tests {
     #[test]
     fn signets_romains_sans_arabe_avant_gardent_leur_niveau() {
         let signets = [signet("I", 1, 3), signet("Un", 1, 3), signet("II", 1, 5), signet("Deux", 1, 5), signet("III", 1, 7)];
-        let (blocs, _, _, _, _, _) = detecter_titres(vec![corps(1, &texte_long())], &signets, 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, .. } =
+            detecter_titres(vec![corps(1, &texte_long())], &signets, 100, SourceTitres::Signets);
         assert!(titres(&blocs).iter().all(|(n, _)| *n == 1), "{:?}", titres(&blocs));
     }
 
     #[test]
     fn serie_romaine_qui_ne_repart_pas_a_un_ne_descend_pas() {
         let signets = [signet("1. A", 1, 3), signet("II", 1, 5), signet("Deux", 1, 5), signet("2. B", 1, 7)];
-        let (blocs, _, _, _, _, _) = detecter_titres(vec![corps(1, &texte_long())], &signets, 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, .. } =
+            detecter_titres(vec![corps(1, &texte_long())], &signets, 100, SourceTitres::Signets);
         assert_eq!(titres(&blocs)[1], (1, "II. Deux".to_string()));
     }
 
@@ -2197,7 +2237,8 @@ mod tests {
             signet("II", 2, 5),
             signet("3. C", 1, 7),
         ];
-        let (blocs, _, _, _, _, _) = detecter_titres(vec![corps(1, &texte_long())], &signets, 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, .. } =
+            detecter_titres(vec![corps(1, &texte_long())], &signets, 100, SourceTitres::Signets);
         let niveaux: Vec<u8> = titres(&blocs).into_iter().map(|(n, _)| n).collect();
         assert_eq!(niveaux, [1, 2, 1, 2, 1]);
     }
@@ -2205,7 +2246,8 @@ mod tests {
     #[test]
     fn deux_numeros_consecutifs_ne_sont_pas_fusionnes() {
         let signets = [signet("1. A", 1, 3), signet("2. B", 1, 5), signet("I", 1, 7), signet("II", 1, 7)];
-        let (blocs, _, _, _, _, _) = detecter_titres(vec![corps(1, &texte_long())], &signets, 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, .. } =
+            detecter_titres(vec![corps(1, &texte_long())], &signets, 100, SourceTitres::Signets);
         let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
         assert_eq!(t, ["1. A", "2. B", "I", "II"]);
     }
@@ -2213,7 +2255,8 @@ mod tests {
     #[test]
     fn signets_fusionnes_introuvables_gardent_le_titre_fusionne() {
         let signets = [signet("1. A", 1, 3), signet("2. B", 1, 5), signet("I", 1, 7), signet("Un", 1, 7)];
-        let (blocs, points, _, _, _, _) = detecter_titres(vec![corps(7, &texte_long())], &signets, 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, points, .. } =
+            detecter_titres(vec![corps(7, &texte_long())], &signets, 100, SourceTitres::Signets);
         assert!(titres(&blocs).contains(&(2, "I. Un".to_string())), "{:?}", titres(&blocs));
         assert!(points.iter().any(|p| p.message.contains("I. Un")));
     }
@@ -2221,7 +2264,8 @@ mod tests {
     #[test]
     fn signet_page_vide_insere_avant_la_page_suivante() {
         let blocs = vec![corps(3, &texte_long()), corps(5, &texte_long())];
-        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &[signet("Partie", 1, 4)], 100, SourceTitres::Signets);
+        let TitresDetectes { blocs, .. } =
+            detecter_titres(blocs, &[signet("Partie", 1, 4)], 100, SourceTitres::Signets);
         assert!(matches!(blocs[0], Bloc::Paragraphe(_)));
         assert!(matches!(&blocs[1], Bloc::Titre { ancre, .. } if ancre.page == 4 && ancre.rect == [0, 0, 1000, 1000]));
         assert!(matches!(blocs[2], Bloc::Paragraphe(_)));
@@ -2235,7 +2279,7 @@ mod tests {
             blocs.push(corps(n, &texte_long()));
         }
         blocs.push(para(11, "Un titre en gras minuscule", 12.0, true, 1));
-        let (blocs, _, source, _, _, _) = detecter_titres(blocs, &[], 11, SourceTitres::Auto);
+        let TitresDetectes { blocs, source, .. } = detecter_titres(blocs, &[], 11, SourceTitres::Auto);
         assert_eq!(source, SourceTitres::GrasMajuscules);
         let t = titres(&blocs);
         assert_eq!(t.len(), 10);
@@ -2254,7 +2298,7 @@ mod tests {
             corps(3, &texte_long()),
             para(4, &long, 18.0, false, 2),
         ];
-        let (blocs, _, source, _, _, _) = detecter_titres(blocs, &[], 4, SourceTitres::Auto);
+        let TitresDetectes { blocs, source, .. } = detecter_titres(blocs, &[], 4, SourceTitres::Auto);
         assert_eq!(source, SourceTitres::Taille);
         assert_eq!(titres(&blocs), vec![(1, "Grand titre".to_string()), (2, "Sous-titre".to_string())]);
         assert!(matches!(blocs[5], Bloc::Paragraphe(_)));
@@ -2276,7 +2320,7 @@ mod tests {
         }
         blocs.push(para(65, "Corps astral", 34.1, false, 1));
         blocs.push(corps(65, &texte_long()));
-        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &[], 70, SourceTitres::Taille);
+        let TitresDetectes { blocs, .. } = detecter_titres(blocs, &[], 70, SourceTitres::Taille);
         let t = titres(&blocs);
         let niveau = |texte: &str| t.iter().find(|(_, x)| x == texte).map(|(n, _)| *n);
         assert_eq!(niveau("Titre de la page 10"), Some(1));
@@ -2297,7 +2341,7 @@ mod tests {
                 blocs.push(corps(page, &texte_long()));
             }
         }
-        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &[], 4, SourceTitres::Taille);
+        let TitresDetectes { blocs, .. } = detecter_titres(blocs, &[], 4, SourceTitres::Taille);
         let t = titres(&blocs);
         let niveau = |texte: &str| t.iter().find(|(_, x)| x == texte).map(|(n, _)| *n);
         assert_eq!(niveau("Partie 2"), Some(1));
@@ -2314,7 +2358,7 @@ mod tests {
             blocs.push(para(page, &format!("Titre {page}"), taille, false, 1));
             blocs.push(corps(page, &texte_long()));
         }
-        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &[], 13, SourceTitres::Taille);
+        let TitresDetectes { blocs, .. } = detecter_titres(blocs, &[], 13, SourceTitres::Taille);
         let t = titres(&blocs);
         assert!(t.iter().all(|(n, _)| *n == 1), "{t:?}");
     }
@@ -2331,7 +2375,7 @@ mod tests {
             blocs.push(corps(page, &texte_long()));
         }
         blocs.push(para(20, "PREMIER CHAPITRE", 15.0, true, 1));
-        let (blocs, _, source, _, _, _) = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, source, .. } = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
         assert_eq!(source, SourceTitres::GrasMajuscules);
         let t = titres(&blocs);
         let n1: Vec<&str> = t.iter().filter(|(n, _)| *n == 1).map(|(_, x)| x.as_str()).collect();
@@ -2347,7 +2391,7 @@ mod tests {
             para(2, "LES ANGES", 18.0, true, 1),
             corps(2, &texte_long()),
         ];
-        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &[], 2, SourceTitres::Taille);
+        let TitresDetectes { blocs, .. } = detecter_titres(blocs, &[], 2, SourceTitres::Taille);
         assert_eq!(titres(&blocs), vec![(1, "CHAPITRE 1: LES ANGES".to_string())]);
         assert_eq!(blocs.len(), 3);
     }
@@ -2358,7 +2402,7 @@ mod tests {
         for (i, nom) in ["Visite à Patmos", "Les anges", "Le ciel", "La terre", "La mer", "Le feu"].iter().enumerate() {
             blocs.push(para(2, &format!("{nom} ...... {}", 12 + i), 18.0, true, 1));
         }
-        let (blocs, points, _, _, _, _) = detecter_titres(blocs, &[], 10, SourceTitres::Taille);
+        let TitresDetectes { blocs, points, .. } = detecter_titres(blocs, &[], 10, SourceTitres::Taille);
         assert!(titres(&blocs).is_empty());
         assert_eq!(blocs.len(), 7);
         let sommaires: Vec<_> = points.iter().filter(|p| p.genre == GenrePoint::Sommaire).collect();
@@ -2376,7 +2420,7 @@ mod tests {
         for _ in 0..4 {
             blocs.push(corps(2, "Il a dit... puis il est reparti, sans un mot... Voilà."));
         }
-        let (blocs, points, _, _, _, _) = detecter_titres(blocs, &[], 3, SourceTitres::GrasMajuscules);
+        let TitresDetectes { blocs, points, .. } = detecter_titres(blocs, &[], 3, SourceTitres::GrasMajuscules);
         assert!(points.iter().all(|p| p.genre != GenrePoint::Sommaire));
         assert_eq!(titres(&blocs).len(), 3);
     }
@@ -2394,7 +2438,8 @@ mod tests {
             blocs.push(para(page, "LES ANGES ET L’ABRE DE VIE", 12.0, true, 1));
             blocs.push(corps(page, &texte_long()));
         }
-        let (blocs, points, _, retraits, _, _) = detecter_titres(blocs, &[], 10, SourceTitres::GrasMajuscules);
+        let TitresDetectes { blocs, points, retraits, .. } =
+            detecter_titres(blocs, &[], 10, SourceTitres::GrasMajuscules);
         let t = titres(&blocs);
         assert_eq!(t.len(), 6);
         assert!(t.iter().all(|(_, x)| x.starts_with("CHAPITRE")), "{t:?}");
@@ -2419,7 +2464,7 @@ mod tests {
             blocs.push(para(page + 1, "NOTES", 12.0, true, 1));
             blocs.push(corps(page + 1, "1. La note du chapitre."));
         }
-        let (blocs, _, _, retraits, _, _) = detecter_titres(blocs, &[], 12, SourceTitres::GrasMajuscules);
+        let TitresDetectes { blocs, retraits, .. } = detecter_titres(blocs, &[], 12, SourceTitres::GrasMajuscules);
         assert!(retraits.is_empty());
         let (blocs, _, _) = crate::notes::notes_regroupees(blocs, &mut crate::notes::Etiqueteuse::new(), &crate::paragraphes::Vocabulaire::default());
         assert_eq!(blocs.iter().filter(|b| matches!(b, Bloc::Note { .. })).count(), 6);
@@ -2434,7 +2479,7 @@ mod tests {
             blocs.push(corps(page, &texte_long()));
             blocs.push(para(page + 1, &format!("CHAPITRE {page}"), 12.0, true, 1));
         }
-        let (blocs, _, _, retraits, _, _) = detecter_titres(blocs, &[], 300, SourceTitres::GrasMajuscules);
+        let TitresDetectes { blocs, retraits, .. } = detecter_titres(blocs, &[], 300, SourceTitres::GrasMajuscules);
         assert!(retraits.is_empty());
         assert_eq!(titres(&blocs).iter().filter(|(_, t)| t == "PREMIÈRE CONFÉRENCE").count(), 5);
     }
@@ -2452,7 +2497,8 @@ mod tests {
             }
             blocs.push(corps(page, &texte_long()));
         }
-        let (blocs, points, _, retraits, _, _) = detecter_titres(blocs, &[], 100, SourceTitres::GrasMajuscules);
+        let TitresDetectes { blocs, points, retraits, .. } =
+            detecter_titres(blocs, &[], 100, SourceTitres::GrasMajuscules);
         assert_eq!(retraits.len(), 40);
         assert!(retraits.iter().all(|r| r.role == Role::TitreCourant));
         assert!(titres(&blocs).iter().all(|(_, t)| t.starts_with("CHAPITRE")));
@@ -2467,7 +2513,7 @@ mod tests {
             blocs.push(para(page, "LES ANGES DANS LA TRADITION", 12.0, true, 1));
             blocs.push(corps(page, &texte_long()));
         }
-        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &[], 4, SourceTitres::GrasMajuscules);
+        let TitresDetectes { blocs, .. } = detecter_titres(blocs, &[], 4, SourceTitres::GrasMajuscules);
         let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
         assert_eq!(t[0], "(2 MARS 1999)");
         assert_eq!(t[1], "LES ANGES DANS LA TRADITION");
@@ -2495,7 +2541,7 @@ mod tests {
             blocs.push(g(page, &format!("({page} FÉVRIER 1995)")));
             blocs.push(corps(page, &texte_long()));
         }
-        let (blocs, points, source, _, _, _) = detecter_titres(blocs, &[], 40, SourceTitres::Auto);
+        let TitresDetectes { blocs, points, source, .. } = detecter_titres(blocs, &[], 40, SourceTitres::Auto);
         assert_eq!(source, SourceTitres::GrasMajuscules);
         let sommaires: Vec<u32> =
             points.iter().filter(|p| p.genre == GenrePoint::Sommaire).map(|p| p.ancre.page).collect();
@@ -2649,7 +2695,7 @@ mod tests {
             para(3, "Corps m\\--", 18.0, false, 1),
             corps(3, &texte_long()),
         ];
-        let (blocs, points, _, _, illisibles, _) = detecter_titres(blocs, &[], 3, SourceTitres::Taille);
+        let TitresDetectes { blocs, points, illisibles, .. } = detecter_titres(blocs, &[], 3, SourceTitres::Taille);
         assert_eq!(illisibles, HashSet::from([ancre(3)]));
         assert_eq!(titres(&blocs), vec![(1, "Douceur et humilité".to_string())]);
         assert!(blocs.iter().any(|b| matches!(b, Bloc::Paragraphe(p) if p.texte_brut() == "Corps m\\--")));
@@ -2681,7 +2727,7 @@ mod tests {
             avec_exposants(vec![texte("2"), Segment::Exposant("e".into()), texte(" partie")]),
             corps(3, &texte_long()),
         ];
-        let (blocs, points, _, _, _, _) = detecter_titres(blocs, &[], 3, SourceTitres::Taille);
+        let TitresDetectes { blocs, points, .. } = detecter_titres(blocs, &[], 3, SourceTitres::Taille);
         assert_eq!(titres(&blocs).len(), 2);
         assert!(points.iter().all(|p| p.genre != GenrePoint::TitreSuspect));
     }
@@ -3413,7 +3459,10 @@ mod tests {
             [lien("Alpha", "ALPHA"), "beta 6*".to_string(), lien("Gamma 7", "Gamma"), lien("Delta 8", "Delta")]
         );
         // L'appel reste hors du lien, dans son paragraphe.
-        assert!(matches!(&blocs[1], Bloc::Paragraphe(p) if p.segments.iter().any(|s| matches!(s, Segment::AppelNote { .. }))));
+        assert!(matches!(
+            &blocs[1],
+            Bloc::Paragraphe(p) if p.segments.iter().any(|s| matches!(s, Segment::AppelNote { .. }))
+        ));
     }
 
     #[test]
@@ -3502,7 +3551,8 @@ mod tests {
         // Sommaire en p3 et p5 ; la p4 ne porte aucun paragraphe : c'est un seul sommaire,
         // et ses deux « La pensée » visent IX puis X.
         let mut blocs = vec![titre_en(1, 1, "Mon livre")];
-        for (page, entrees) in [(3, ["Alpha 10", "Beta 11", "La pensée 12"]), (5, ["Gamma 13", "Delta 14", "La pensée 20"])] {
+        let sommaires = [(3, ["Alpha 10", "Beta 11", "La pensée 12"]), (5, ["Gamma 13", "Delta 14", "La pensée 20"])];
+        for (page, entrees) in sommaires {
             for (k, texte) in entrees.into_iter().enumerate() {
                 blocs.push(para_en(page, 100 + 40 * k as u16, texte, false));
             }
@@ -3558,7 +3608,8 @@ mod tests {
         // Le même sommaire en tête (p2) et en fin de livre (p40) : chacun vise IX puis X.
         let sommaire = ["Alpha 5", "Beta 6", "La pensée 10", "La pensée 20"];
         let mut blocs = vec![titre_en(1, 1, "Mon livre")];
-        let entrees = |page: u32| sommaire.iter().enumerate().map(move |(k, t)| para_en(page, 100 + 40 * k as u16, t, false));
+        let entrees =
+            |page: u32| sommaire.iter().enumerate().map(move |(k, t)| para_en(page, 100 + 40 * k as u16, t, false));
         blocs.extend(entrees(2));
         for (page, titre) in [(5, "Alpha"), (6, "Beta"), (10, "IX. La pensée"), (20, "X. La pensée")] {
             blocs.push(titre_en(1, page, titre));
@@ -3692,7 +3743,7 @@ mod tests {
         let blocs = livre_a_sommaire(2, &SOMMAIRE_IMPRIME, &TITRES_DU_CORPS);
         let numero_i = blocs.iter().find(|b| texte_de(b) == "I").expect("numéro I").ancre();
         let nb_textes = blocs.len();
-        let (blocs, _, source, _, _, _) = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, source, .. } = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
         assert_eq!(source, SourceTitres::Taille);
         assert_eq!(
             titres(&blocs),
@@ -3705,7 +3756,9 @@ mod tests {
         );
         // Le titre est ancré au paragraphe du numéro, qui n'en reste pas un.
         assert_eq!(blocs.iter().find(|b| matches!(b, Bloc::Titre { .. })).unwrap().ancre(), numero_i);
-        assert!(blocs.iter().all(|b| !matches!(b, Bloc::Paragraphe(p) if numero_seul(p.texte_brut().trim()).is_some())));
+        assert!(
+            blocs.iter().all(|b| !matches!(b, Bloc::Paragraphe(p) if numero_seul(p.texte_brut().trim()).is_some()))
+        );
         // Les paragraphes du sommaire restent tels quels ; les 11 lignes de titre du corps
         // font 4 titres.
         assert_eq!(blocs.len(), nb_textes - 11 + 4);
@@ -3715,7 +3768,7 @@ mod tests {
     #[test]
     fn entree_sur_deux_paragraphes_retrouvee_sur_deux_paragraphes() {
         let blocs = livre_a_sommaire(2, &SOMMAIRE_IMPRIME, &TITRES_DU_CORPS);
-        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, .. } = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
         let page_13: Vec<String> = blocs.iter().filter(|b| b.ancre().page == 13).map(texte_de).collect();
         assert_eq!(page_13, ["# III. JUGEMENTS ANALYTIQUES (LOGIQUE II)", texte_long().as_str()]);
     }
@@ -3723,7 +3776,7 @@ mod tests {
     #[test]
     fn cesure_du_sommaire_recollee() {
         let blocs = livre_a_sommaire(2, &SOMMAIRE_IMPRIME, &TITRES_DU_CORPS);
-        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, .. } = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
         let page_16: Vec<String> = blocs.iter().filter(|b| b.ancre().page == 16).map(texte_de).collect();
         assert_eq!(page_16, ["# IV. LE SYSTÈME DES CATÉGORIES CHEZ HEGEL", texte_long().as_str()]);
     }
@@ -3745,7 +3798,8 @@ mod tests {
             (13, &["III", "LES BASES DE LA SUITE (I)"]),
             (17, &["Notes"]),
         ];
-        let (blocs, _, _, _, _, _) = detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, .. } =
+            detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
         let n1: Vec<(String, u32)> = blocs
             .iter()
             .filter_map(|b| match b {
@@ -3770,7 +3824,7 @@ mod tests {
             (6, &["III", "JUGEMENTS ANALYTIQUES", "(LOGIQUE II)"]),
             (9, &["IV", "LE SYSTÈME DES CATÉGORIES CHEZ HEGEL"]),
         ];
-        let (blocs, _, _, _, _, _) =
+        let TitresDetectes { blocs, .. } =
             detecter_titres(livre_a_sommaire(20, &SOMMAIRE_IMPRIME, &corps_titres), &[], 20, SourceTitres::Auto);
         let pages: Vec<(u8, u32)> = blocs
             .iter()
@@ -3793,7 +3847,7 @@ mod tests {
             (13, &["III", "JUGEMENTS ANALYTIQUES", "(LOGIQUE II)"]),
             (16, &["IV", "LE SYSTÈME DES CATÉGORIES CHEZ HEGEL"]),
         ];
-        let (blocs, _, _, _, _, _) =
+        let TitresDetectes { blocs, .. } =
             detecter_titres(livre_a_sommaire(4, &SOMMAIRE_IMPRIME, &corps_titres), &[], 20, SourceTitres::Auto);
         let premier = blocs.iter().find(|b| matches!(b, Bloc::Titre { .. })).unwrap();
         assert_eq!((texte_de(premier), premier.ancre().page), ("# I. LES BASES DE LA SUITE (I)".to_string(), 8));
@@ -3813,7 +3867,7 @@ mod tests {
                 }
             }
         }
-        let (blocs, _, source, _, _, _) = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, source, .. } = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
         assert_eq!(source, SourceTitres::Taille);
         assert_eq!(
             titres(&blocs),
@@ -3844,7 +3898,7 @@ mod tests {
                 *b = para(b.ancre().page, &texte, 18.0, false, 1);
             }
         }
-        let (blocs, _, source, _, _, _) = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, source, .. } = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
         assert_eq!(source, SourceTitres::Taille);
         let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
         assert_eq!(t, ["ALPHA", "BETA", "GAMMA", "DELTA"]);
@@ -3863,7 +3917,8 @@ mod tests {
             (13, &["LOGIQUE", "III.", "JUGEMENTS ANALYTIQUES", "(LOGIQUE II)"]),
             TITRES_DU_CORPS[3],
         ];
-        let (blocs, _, _, _, _, _) = detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, .. } =
+            detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
         let page_13: Vec<String> = blocs.iter().filter(|b| b.ancre().page == 13).map(texte_de).collect();
         assert_eq!(page_13, ["# LOGIQUE", "# III. JUGEMENTS ANALYTIQUES (LOGIQUE II)", texte_long().as_str()]);
         // Le sommaire reste cliquable : ses 5 entrées sont liées.
@@ -3888,7 +3943,7 @@ mod tests {
             ligne_en(6, 100, "LE CIEL"),
             corps(6, &texte_long()),
         ];
-        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &[], 6, SourceTitres::Auto);
+        let TitresDetectes { blocs, .. } = detecter_titres(blocs, &[], 6, SourceTitres::Auto);
         let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
         assert_eq!(t, ["LES ANGES", "LA GENÈSE", "LE CIEL"]);
     }
@@ -3916,7 +3971,8 @@ mod tests {
             (13, &["III", "LA CULTURE PRATIQUE DE LA PENSÉE"]),
             (16, &["IV", "LE SYSTÈME DES CATÉGORIES CHEZ HEGEL"]),
         ];
-        let (blocs, _, _, _, _, _) = detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, .. } =
+            detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
         let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
         assert_eq!(
             t,
@@ -4005,7 +4061,7 @@ mod tests {
     fn titre_du_livre_candidat_et_sommaire_imprime_sans_doublon() {
         let mut blocs = livre_a_sommaire(2, &SOMMAIRE_IMPRIME, &TITRES_DU_CORPS);
         blocs.insert(0, para(1, "MON LIVRE", 20.0, false, 1));
-        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, .. } = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
         assert_eq!(titres(&blocs)[0], (2, "MON LIVRE".to_string()));
         let blocs = placer_titre_livre(blocs, "Mon livre");
         let t = titres(&blocs);
@@ -4022,7 +4078,8 @@ mod tests {
         let Bloc::Paragraphe(mut avant_propos) = para(3, "AVANT-PROPOS", 12.0, true, 1) else { unreachable!() };
         avant_propos.ancre.moitie = Moitie::Gauche;
         blocs.insert(0, Bloc::Paragraphe(avant_propos));
-        let (blocs, points, _, _, _, sommaires_detectes) = detecter_titres(blocs, &[], 80, SourceTitres::GrasMajuscules);
+        let TitresDetectes { blocs, points, sommaires: sommaires_detectes, .. } =
+            detecter_titres(blocs, &[], 80, SourceTitres::GrasMajuscules);
         assert_eq!(titres(&blocs), [(1, "AVANT-PROPOS".to_string())]);
         assert_eq!(sommaires_detectes, BTreeSet::from([(3, Moitie::Droite)]));
         // Un seul point « sommaire », ancré à la moitié de sommaire.
@@ -4061,7 +4118,7 @@ mod tests {
     #[test]
     fn recherche_apres_un_sommaire_fini_sur_une_moitie_gauche() {
         // Sommaire en p3g, premier titre du corps en p3d : la recherche commence en p3d.
-        let (blocs, _, _, _, _, _) = detecter_titres(livre_au_sommaire_en_p3g(), &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, .. } = detecter_titres(livre_au_sommaire_en_p3g(), &[], 20, SourceTitres::Auto);
         let premier = blocs.iter().find(|b| matches!(b, Bloc::Titre { .. })).expect("un titre");
         assert_eq!(texte_de(premier), "# I. LES BASES DE LA SUITE (I)");
         assert_eq!(premier.ancre().demi_page(), (3, Moitie::Droite));
@@ -4072,7 +4129,7 @@ mod tests {
     fn entree_d_un_sommaire_en_p3g_liee_au_titre_de_p3d() {
         // Même livre, puis le sommaire cliquable : la p3g est un sommaire, et son entrée
         // « Les bases de la suite (I) » vise le titre de la p3d (même page, autre moitié).
-        let (blocs, _, _, _, _, _) = detecter_titres(livre_au_sommaire_en_p3g(), &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, .. } = detecter_titres(livre_au_sommaire_en_p3g(), &[], 20, SourceTitres::Auto);
         let (blocs, _, moities) = sommaire_cliquable(blocs, "");
         assert_eq!(moities, BTreeSet::from([(3, Moitie::Gauche)]));
         let rendu = rendu_sommaire(&blocs);
@@ -4186,6 +4243,131 @@ mod tests {
         assert_eq!(points.iter().map(|p| p.ancre.demi_page()).collect::<Vec<_>>(), [(3, Moitie::Gauche)]);
     }
 
+    /// Chapitres du livre sans signets de `livre_sans_signets_au_sommaire_reparti` : titre
+    /// (une ligne de la taille du texte) et page.
+    const CHAPITRES_REPARTIS: [(&str, u32); 6] = [
+        ("LES ORIGINES", 5),
+        ("LA LUMIÈRE", 7),
+        ("LE FEU", 9),
+        ("LA TERRE", 11),
+        ("LES EAUX", 13),
+        ("LE CIEL", 15),
+    ];
+
+    /// Livre de 20 pages sans signets : le sommaire réparti sur les (demi-)pages données,
+    /// chacune avec ses lignes, puis le corps (`CHAPITRES_REPARTIS` et texte courant, des
+    /// pages 4 à 20).
+    fn livre_sans_signets_au_sommaire_reparti(moities: &[(u32, Moitie, &[&str])]) -> Vec<Bloc> {
+        let mut blocs = vec![corps(1, &texte_long())];
+        for (page, moitie, lignes) in moities {
+            blocs.extend(lignes.iter().map(|t| para_moitie(*page, *moitie, t, 1)));
+        }
+        for page in 4..=20 {
+            if let Some((titre, _)) = CHAPITRES_REPARTIS.iter().find(|(_, p)| *p == page) {
+                blocs.push(ligne_en(page, 100, titre));
+            }
+            blocs.push(corps(page, &texte_long()));
+        }
+        blocs
+    }
+
+    /// Les 4 dernières entrées (`CHAPITRES_REPARTIS`), pour la p3d.
+    const ENTREES_EN_P3D: [&str; 4] = ["Le feu 9", "La terre 11", "Les eaux 13", "Le ciel 15"];
+
+    #[test]
+    fn sommaire_reparti_detecte_sur_la_moitie_qui_precede() {
+        let detectees = |gauche: &[&str]| {
+            moities_sommaire(&livre_sans_signets_au_sommaire_reparti(&[
+                (3, Moitie::Gauche, gauche),
+                (3, Moitie::Droite, &ENTREES_EN_P3D),
+            ]))
+        };
+        let p3 = BTreeSet::from([(3, Moitie::Gauche), (3, Moitie::Droite)]);
+        let p3d = BTreeSet::from([(3, Moitie::Droite)]);
+        // Titre du sommaire et 2 entrées numérotées : la p3g en fait partie.
+        assert_eq!(detectees(&["Table des matières", "Les origines 5", "La lumière 7"]), p3);
+        // Une entrée numérotée et des lignes courtes suffisent, sans titre.
+        assert_eq!(detectees(&["Les origines 5", "La lumière"]), p3);
+        // Aucune ligne numérotée : pas de sommaire.
+        assert_eq!(detectees(&["Table des matières", "Avant-propos"]), p3d);
+        // Un paragraphe long : pas de sommaire.
+        let long = texte_long();
+        assert_eq!(detectees(&[long.as_str(), "Les origines 5", "La lumière 7"]), p3d);
+
+        // La remontée s'arrête à la (demi-)page qui porte le titre du sommaire.
+        let livre = |gauche: &'static [&'static str], droite: &'static [&'static str]| {
+            livre_sans_signets_au_sommaire_reparti(&[
+                (2, Moitie::Droite, &["Avant 2", "Avant 3"]),
+                (3, Moitie::Gauche, gauche),
+                (3, Moitie::Droite, droite),
+            ])
+        };
+        let entrees: &[&str] = &ENTREES_EN_P3D;
+        assert_eq!(moities_sommaire(&livre(&["Table des matières", "Les origines 5", "La lumière 7"], entrees)), p3);
+        assert_eq!(
+            moities_sommaire(&livre(&["Les origines 5", "La lumière 7"], entrees)),
+            BTreeSet::from([(2, Moitie::Droite), (3, Moitie::Gauche), (3, Moitie::Droite)])
+        );
+        let titre_en_p3d: &[&str] = &["Table des matières", "Le feu 9", "La terre 11", "Les eaux 13", "Le ciel 15"];
+        assert_eq!(moities_sommaire(&livre(&["Les origines 5", "La lumière 7"], titre_en_p3d)), p3d);
+    }
+
+    #[test]
+    fn sommaire_reparti_sur_deux_moities_donne_tous_les_titres_et_tous_les_liens() {
+        let livre = livre_sans_signets_au_sommaire_reparti(&[
+            (3, Moitie::Gauche, &["Table des matières", "Les origines 5", "La lumière 7"]),
+            (3, Moitie::Droite, &ENTREES_EN_P3D),
+        ]);
+        let TitresDetectes { blocs, source, .. } = detecter_titres(livre, &[], 20, SourceTitres::Auto);
+        assert_eq!(source, SourceTitres::Taille);
+        let attendus: Vec<(u8, String)> = CHAPITRES_REPARTIS.iter().map(|(t, _)| (1, t.to_string())).collect();
+        assert_eq!(titres(&blocs), attendus);
+        let (blocs, _, moities) = sommaire_cliquable(blocs, "");
+        assert_eq!(moities, BTreeSet::from([(3, Moitie::Gauche), (3, Moitie::Droite)]));
+        let rendu = rendu_sommaire(&blocs);
+        let debut = rendu.iter().position(|t| t == "# Table des matières").expect("titre du sommaire");
+        let entrees = ["Les origines 5", "La lumière 7"].into_iter().chain(ENTREES_EN_P3D);
+        let liens: Vec<String> = entrees.zip(CHAPITRES_REPARTIS).map(|(e, (titre, _))| lien(e, titre)).collect();
+        assert_eq!(rendu[debut + 1..debut + 7], liens[..]);
+    }
+
+    #[test]
+    fn recherche_d_entree_reprend_a_la_demi_page_de_la_precedente() {
+        // « Alpha » est retrouvé en p5d. « Beta » figure aussi en p5g, avant lui dans
+        // l'ordre de lecture : la recherche de l'entrée suivante part de la p5d et le
+        // retrouve en p6.
+        let mut blocs = vec![corps(1, &texte_long())];
+        blocs.extend(["Alpha 5", "Beta 6", "Gamma 7", "Delta 8"].iter().map(|t| ligne_en(2, 100, t)));
+        blocs.extend([
+            para_moitie(5, Moitie::Gauche, "Beta", 1),
+            para_moitie(5, Moitie::Gauche, &texte_long(), 5),
+            para_moitie(5, Moitie::Droite, "Alpha", 1),
+            para_moitie(5, Moitie::Droite, &texte_long(), 5),
+        ]);
+        for (page, titre) in [(6, "Beta"), (7, "Gamma"), (8, "Delta")] {
+            blocs.push(ligne_en(page, 100, titre));
+            blocs.push(corps(page, &texte_long()));
+        }
+        blocs.push(corps(20, &texte_long()));
+        let TitresDetectes { blocs, .. } = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
+        let lieux: Vec<(String, DemiPage)> = blocs
+            .iter()
+            .filter_map(|b| match b {
+                Bloc::Titre { texte, ancre, .. } => Some((texte.clone(), ancre.demi_page())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            lieux,
+            [
+                ("Alpha".to_string(), (5, Moitie::Droite)),
+                ("Beta".to_string(), (6, Moitie::Entiere)),
+                ("Gamma".to_string(), (7, Moitie::Entiere)),
+                ("Delta".to_string(), (8, Moitie::Entiere)),
+            ]
+        );
+    }
+
     #[test]
     fn moitie_qui_precede_avec_du_texte_n_est_pas_un_sommaire() {
         let livre = livre_au_sommaire_sur_deux_moities(&["Imprimé en Suisse", "Un 5", "Deux 7"]);
@@ -4214,7 +4396,9 @@ mod tests {
         ] {
             assert_eq!(numero_seul(texte), Some(valeur), "{texte}");
         }
-        for texte in ["", ".", "0", "0.", "07", "IIII", "IIX", "VX", "IL", "VV", "1984", "1984.", "I.I", "A", "iv", "12 3"] {
+        let mal_formes =
+            ["", ".", "0", "0.", "07", "IIII", "IIX", "VX", "IL", "VV", "1984", "1984.", "I.I", "A", "iv", "12 3"];
+        for texte in mal_formes {
             assert_eq!(numero_seul(texte), None, "{texte}");
         }
     }
@@ -4255,7 +4439,8 @@ mod tests {
             (14, &["IX", "IOTA"]),
             (15, &["X", "KAPPA"]),
         ];
-        let (blocs, _, _, _, _, _) = detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, .. } =
+            detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
         let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
         assert_eq!(
             t,
@@ -4277,7 +4462,8 @@ mod tests {
             (11, &["12", "GAMMA"]),
             (13, &["III", "DELTA"]),
         ];
-        let (blocs, _, _, _, _, _) = detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, .. } =
+            detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
         let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
         assert_eq!(t, ["I. ALPHA", "II. BETA", "GAMMA", "III. DELTA"]);
         let page_11: Vec<String> = blocs.iter().filter(|b| b.ancre().page == 11).map(texte_de).collect();
@@ -4297,7 +4483,8 @@ mod tests {
             (15, &["DIX"]),
             (17, &["MIX"]),
         ];
-        let (blocs, _, _, _, _, _) = detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, .. } =
+            detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
         let t: Vec<(u8, String)> = titres(&blocs);
         assert_eq!(t, ["ALPHA", "BETA", "1984", "GAMMA", "DIX", "MIX"].map(|x| (1, x.to_string())));
     }
@@ -4321,7 +4508,7 @@ mod tests {
             ],
             &titres_du_corps,
         );
-        let (blocs, _, _, _, _, pages_som) = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, sommaires: pages_som, .. } = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
         assert_eq!(pages_som, BTreeSet::from([(2, Moitie::Entiere), (3, Moitie::Entiere)]));
         let t: Vec<(u8, String)> = titres(&blocs);
         assert_eq!(
@@ -4342,7 +4529,7 @@ mod tests {
                 p.ancre.moitie = if p.texte_brut() == "IV" { Moitie::Gauche } else { Moitie::Droite };
             }
         }
-        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, .. } = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
         let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
         assert_eq!(
             t,
@@ -4367,10 +4554,13 @@ mod tests {
             signet("JUGEMENTS ANALYTIQUES (LOGIQUE II)", 1, 13),
         ];
         let blocs = livre_a_sommaire(2, &SOMMAIRE_IMPRIME, &TITRES_DU_CORPS);
-        let (blocs, _, source, _, _, _) = detecter_titres(blocs, &signets, 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, source, .. } = detecter_titres(blocs, &signets, 20, SourceTitres::Auto);
         assert_eq!(source, SourceTitres::Signets);
         let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
-        assert_eq!(t, ["LES BASES DE LA SUITE (I)", "LES BASES DE LA SUITE (II)", "JUGEMENTS ANALYTIQUES (LOGIQUE II)"]);
+        assert_eq!(
+            t,
+            ["LES BASES DE LA SUITE (I)", "LES BASES DE LA SUITE (II)", "JUGEMENTS ANALYTIQUES (LOGIQUE II)"]
+        );
         assert!(blocs.iter().any(|b| texte_de(b) == "I"));
         assert!(blocs.iter().any(|b| texte_de(b) == "LE SYSTÈME DES CATÉGORIES CHEZ HEGEL"));
     }
@@ -4385,12 +4575,13 @@ mod tests {
             ligne_en(2, 140, "CHAPITRE 2: BETA"),
             ligne_en(2, 180, "CHAPITRE 3: GAMMA"),
         ];
-        blocs.extend(["Alpha 5", "Beta 7", "Gamma 9", "Delta 11"].iter().enumerate().map(|(k, t)| ligne_en(3, 100 + 30 * k as u16, t)));
+        let sommaire = ["Alpha 5", "Beta 7", "Gamma 9", "Delta 11"];
+        blocs.extend(sommaire.iter().enumerate().map(|(k, t)| ligne_en(3, 100 + 30 * k as u16, t)));
         for (page, titre) in [(5, "ALPHA"), (7, "BETA"), (9, "GAMMA"), (11, "DELTA")] {
             blocs.push(ligne_en(page, 100, titre));
             blocs.push(corps(page, &texte_long()));
         }
-        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &[], 11, SourceTitres::Auto);
+        let TitresDetectes { blocs, .. } = detecter_titres(blocs, &[], 11, SourceTitres::Auto);
         assert_eq!(titres(&blocs), ["ALPHA", "BETA", "GAMMA"].map(|x| (1, x.to_string())));
         assert!(blocs.iter().any(|b| texte_de(b) == "DELTA"));
     }
@@ -4409,7 +4600,7 @@ mod tests {
             }
             blocs.push(bloc);
         }
-        let (blocs, _, _, retraits, _, _) = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, retraits, .. } = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
         assert_eq!(retraits.len(), 18);
         assert_eq!(titres(&blocs), ["ALPHA", "BETA", "GAMMA", "DELTA"].map(|x| (1, x.to_string())));
     }
@@ -4425,8 +4616,12 @@ mod tests {
             para(5, "ALPHA", 12.0, false, 1),
             corps(5, &texte_long()),
         ];
-        let cherche =
-            SignetCherche { signet: signet("Alpha", 1, 5), texte_impose: false, numero_avant: false, trouve: Some((3, 4)) };
+        let cherche = SignetCherche {
+            signet: signet("Alpha", 1, 5),
+            texte_impose: false,
+            numero_avant: false,
+            trouve: Some((3, 4)),
+        };
         let (blocs, points, titres_produits) = titres_depuis_signets(blocs, &[cherche], &BTreeSet::new());
         assert!(points.is_empty());
         assert!(matches!(&blocs[1], Bloc::Paragraphe(_)));
@@ -4491,7 +4686,8 @@ mod tests {
             (9, &["III", "GAMMA"]),
             (11, &["IV", "DELTA"]),
         ];
-        let (blocs, _, _, _, _, _) = detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
+        let TitresDetectes { blocs, .. } =
+            detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
         let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
         assert_eq!(t, ["I. ALPHA", "II. BETA", "III. GAMMA", "IV. DELTA"]);
     }
@@ -4508,8 +4704,12 @@ mod tests {
             ]
         };
         for trouve in [(2, 3), (1, 1), (5, 7), (2, 1)] {
-            let cherche =
-                SignetCherche { signet: signet("Alpha", 1, 5), texte_impose: false, numero_avant: false, trouve: Some(trouve) };
+            let cherche = SignetCherche {
+                signet: signet("Alpha", 1, 5),
+                texte_impose: false,
+                numero_avant: false,
+                trouve: Some(trouve),
+            };
             let (blocs, points, produits) = titres_depuis_signets(blocs(), &[cherche], &BTreeSet::new());
             assert!(points.is_empty(), "{trouve:?}");
             assert!(matches!(&blocs[1], Bloc::Titre { texte, .. } if texte == "ALPHA"), "{trouve:?}");
