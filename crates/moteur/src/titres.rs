@@ -289,30 +289,29 @@ impl From<Signet> for SignetCherche {
     }
 }
 
-/// Type d'une numérotation de titre.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Type d'une numérotation de titre, ou genre d'un numéro seul.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Numerotation {
     Arabe,
     Romaine,
 }
 
-static NUMERO_SEUL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:[IVXLCDM]+|\d+)\.?$").unwrap());
 /// Numéro romain bien formé (« IX », « XIV. », pas « IIX » ni « VX ») ; peut être vide.
 static ROMAIN_BIEN_FORME: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})\.?$").expect("motif valide")
 });
-/// Nombre arabe d'au plus 3 chiffres (« 12 », « 3. ») : « 1984 » n'est pas un numéro.
-static ARABE_COURT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d{1,3}\.?$").expect("motif valide"));
+/// Nombre arabe de 1 à 999 (« 12 », « 3. ») : ni « 0 », ni « 07 », ni « 1984 ».
+static ARABE_COURT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[1-9]\d{0,2}\.?$").expect("motif valide"));
 static NUMEROTE_ARABE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+\.?(?:\s|$)").unwrap());
 static NUMEROTE_ROMAIN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[IVXLCDM]+\.?(?:\s|$)").unwrap());
 /// Numéro en tête d'un texte de titre, suivi ou non d'un point (« I La pierre »).
 static NUMERO_EN_TETE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([IVXLCDM]+|\d+)\.?\s+").unwrap());
 
-/// Valeur d'un texte fait seulement d'un numéro bien formé, suivi ou non d'un point : un
-/// romain non vide (`ROMAIN_BIEN_FORME`) ou un nombre arabe d'au plus 3 chiffres.
-fn numero_seul(texte: &str) -> Option<u32> {
+/// Genre et valeur d'un texte fait seulement d'un numéro bien formé, suivi ou non d'un
+/// point : un romain non vide (`ROMAIN_BIEN_FORME`) ou un nombre arabe de 1 à 999.
+fn numero_seul(texte: &str) -> Option<(Numerotation, u32)> {
     if ARABE_COURT.is_match(texte) {
-        return texte.trim_end_matches('.').parse().ok();
+        return texte.trim_end_matches('.').parse().ok().map(|n| (Numerotation::Arabe, n));
     }
     let romain = texte.trim_end_matches('.');
     if romain.is_empty() || !ROMAIN_BIEN_FORME.is_match(texte) {
@@ -329,13 +328,12 @@ fn numero_seul(texte: &str) -> Option<u32> {
     };
     let chiffres: Vec<u32> = romain.chars().map(chiffre).collect();
     // Un chiffre plus petit que le suivant se retranche (« IX » = 10 − 1).
-    Some(
-        chiffres
-            .iter()
-            .enumerate()
-            .map(|(k, &v)| if chiffres.get(k + 1).is_some_and(|&w| w > v) { -(v as i64) } else { v as i64 })
-            .sum::<i64>() as u32,
-    )
+    let valeur = chiffres
+        .iter()
+        .enumerate()
+        .map(|(k, &v)| if chiffres.get(k + 1).is_some_and(|&w| w > v) { -(v as i64) } else { v as i64 })
+        .sum::<i64>() as u32;
+    Some((Numerotation::Romaine, valeur))
 }
 
 fn numerotation(titre: &str) -> Option<Numerotation> {
@@ -361,8 +359,8 @@ fn preparer_signets(signets: &[Signet]) -> Vec<SignetCherche> {
     while i < signets.len() {
         let s = &signets[i];
         let suivant = signets.get(i + 1).filter(|n| {
-            NUMERO_SEUL.is_match(s.titre.trim())
-                && !NUMERO_SEUL.is_match(n.titre.trim())
+            numero_seul(s.titre.trim()).is_some()
+                && numero_seul(n.titre.trim()).is_none()
                 && n.niveau == s.niveau
                 && n.page == s.page
         });
@@ -409,9 +407,14 @@ fn preparer_signets(signets: &[Signet]) -> Vec<SignetCherche> {
     fusionnes
 }
 
-/// Texte et valeur du paragraphe qui précède `debut`, s'il est fait seulement d'un numéro
-/// bien formé (`numero_seul`), sur la même (demi-)page, et pas déjà pris dans un titre.
-fn numero_seul_avant(blocs: &[Bloc], debut: usize, utilises: &HashSet<usize>) -> Option<(String, u32)> {
+/// Texte, genre et valeur du paragraphe qui précède `debut`, s'il est fait seulement d'un
+/// numéro bien formé (`numero_seul`), sur la même (demi-)page, et pas déjà pris dans un
+/// titre.
+fn numero_seul_avant(
+    blocs: &[Bloc],
+    debut: usize,
+    utilises: &HashSet<usize>,
+) -> Option<(String, (Numerotation, u32))> {
     let i = debut.checked_sub(1).filter(|i| !utilises.contains(i))?;
     let Bloc::Paragraphe(p) = &blocs[i] else { return None };
     if p.ancre.demi_page() != blocs[debut].ancre().demi_page() {
@@ -421,19 +424,26 @@ fn numero_seul_avant(blocs: &[Bloc], debut: usize, utilises: &HashSet<usize>) ->
     numero_seul(&texte).map(|valeur| (texte, valeur))
 }
 
-/// Pour chaque numéro (dans l'ordre des entrées retrouvées), est-il absorbé ? Seule la
-/// suite 1, 2, 3… l'est (romains ou arabes) : une entrée sans numéro ne la casse pas, et
-/// un numéro hors suite (un folio « 12 » resté seul) n'est pas absorbé.
-fn numeros_en_suite(numeros: &[Option<u32>]) -> Vec<bool> {
-    let mut attendu = 1;
+/// Pour chaque numéro (genre et valeur, dans l'ordre des entrées retrouvées), est-il
+/// absorbé ? Le premier absorbé vaut 1 ou 2 (« I » manquant). Ensuite, un numéro `n` du
+/// genre du précédent absorbé `prec` l'est s'il vaut 1 (nouvelle partie, nouveau tome)
+/// ou s'il est entre `prec + 1` et `prec + 2` (un numéro sauté). Un numéro refusé (un
+/// folio « 12 » resté seul) n'est pas absorbé et ne change pas `prec` ; une entrée sans
+/// numéro non plus.
+fn numeros_en_suite(numeros: &[Option<(Numerotation, u32)>]) -> Vec<bool> {
+    let mut prec: Option<(Numerotation, u32)> = None;
     numeros
         .iter()
         .map(|numero| {
-            let dans_la_suite = *numero == Some(attendu);
-            if dans_la_suite {
-                attendu += 1;
+            let Some((genre, n)) = *numero else { return false };
+            let absorbe = match prec {
+                None => n == 1 || n == 2,
+                Some((genre_prec, p)) => genre == genre_prec && (n == 1 || (p + 1..=p + 2).contains(&n)),
+            };
+            if absorbe {
+                prec = Some((genre, n));
             }
-            dans_la_suite
+            absorbe
         })
         .collect()
 }
@@ -456,18 +466,24 @@ fn titres_depuis_signets(
     for SignetCherche { signet, texte_impose, numero_avant, trouve } in signets {
         let niveau = signet.niveau.clamp(1, 3);
         let cible = normaliser_titre(&signet.titre);
-        let trouve = if let Some((debut, fin)) = *trouve {
-            // Correspondance exacte trouvée dans ces mêmes blocs (`entrees_du_sommaire`).
-            let textes: Vec<String> = blocs[debut..fin]
+        // Correspondance exacte trouvée dans ces mêmes blocs (`entrees_du_sommaire`). Elle
+        // n'est reprise que si elle désigne encore des paragraphes libres qui disent le
+        // titre ; sinon (blocs changés depuis), le signet est cherché normalement.
+        let transmise = trouve.and_then(|(debut, fin)| {
+            let paragraphes = blocs.get(debut..fin).filter(|_| debut < fin)?;
+            let textes: Vec<String> = paragraphes
                 .iter()
                 .map(|b| match b {
-                    Bloc::Paragraphe(p) => p.texte_brut().trim().to_string(),
-                    _ => unreachable!("correspondance faite de paragraphes"),
+                    Bloc::Paragraphe(p) => Some(p.texte_brut().trim().to_string()),
+                    _ => None,
                 })
-                .collect();
+                .collect::<Option<_>>()?;
             let texte = textes.join(" ");
-            debug_assert_eq!(normaliser_titre(&texte), cible, "blocs changés depuis la recherche");
-            Some((debut, fin, texte))
+            (normaliser_titre(&texte) == cible && !(debut..fin).any(|i| utilises.contains(&i)))
+                .then_some((debut, fin, texte))
+        });
+        let trouve = if transmise.is_some() {
+            transmise
         } else if cible.is_empty() {
             None
         } else {
@@ -1144,17 +1160,18 @@ fn texte_entree(textes: &[&str]) -> String {
 /// `texte_entree`) ; la plus longue est essayée d'abord, et seule une correspondance
 /// exacte (`chercher_entree`, hors `pages_som`) est retenue. Les paragraphes du sommaire
 /// d'une entrée retrouvée sont sautés ; une entrée introuvable est ignorée. Un paragraphe
-/// fait seulement d'un numéro bien formé (`numero_seul` : « IX » seul sur sa ligne), qui
-/// ne finit pas par un numéro de page (« DIX 15 » est une entrée), n'ouvre pas d'entrée
-/// et n'est pas cherché : l'entrée suivante absorbera le numéro du corps. Un sommaire de
+/// fait seulement d'un numéro bien formé (`numero_seul` : « IX » seul sur sa ligne), sans
+/// numéro de page, ou suivi d'un numéro de page si le numéro vaut moins de 100
+/// (« IX 15 », mais « DIX 15 » est une entrée), n'ouvre pas d'entrée et n'est pas
+/// cherché : l'entrée suivante absorbera le numéro du corps. Un sommaire de
 /// la première moitié du livre est cherché à partir de la (demi-)page qui suit sa
 /// dernière (demi-)page dans l'ordre de lecture (p3d après un sommaire fini en p3g), un
 /// sommaire de fin à partir de la page 1 ; ensuite, chaque entrée à partir de la page de
 /// la précédente retrouvée. Un paragraphe du corps ne sert qu'une fois.
 /// Renvoie, par entrée retrouvée, un pseudo-signet de niveau 1 à sa page, avec sa
 /// correspondance (`trouve`) dans `blocs`. Le numéro seul qui précède une correspondance
-/// (`numero_seul_avant`) est absorbé (`numero_avant`) s'il est dans la suite 1, 2, 3…
-/// des numéros des entrées retrouvées (`numeros_en_suite`).
+/// (`numero_seul_avant`) est absorbé (`numero_avant`) s'il suit les numéros absorbés
+/// avant lui, dans l'ordre des entrées retrouvées (`numeros_en_suite`).
 fn entrees_du_sommaire(
     blocs: &[Bloc],
     moities_som: &BTreeSet<DemiPage>,
@@ -1188,10 +1205,13 @@ fn entrees_du_sommaire(
         while k < paragraphes.len() {
             let suite = paragraphes_d_entree(blocs, paragraphes[k]);
             let textes: Vec<&str> = suite.iter().map(String::as_str).collect();
-            let numero_seul_sans_page = |t: &&str| {
-                numero_de_page_final(t.trim()).is_none() && numero_seul(&texte_entree(&[t])).is_some()
+            // Ligne d'un numéro seul : sautée sans numéro de page (« IX »), ou avec un numéro
+            // de page si le numéro vaut moins de 100 (« IX 15 ») ; « DIX 15 » est une entrée.
+            let numero_seul_sans_titre = |t: &&str| {
+                numero_seul(&texte_entree(&[t]))
+                    .is_some_and(|(_, n)| n < 100 || numero_de_page_final(t.trim()).is_none())
             };
-            if textes.first().is_some_and(numero_seul_sans_page) {
+            if textes.first().is_some_and(numero_seul_sans_titre) {
                 k += 1;
                 continue;
             }
@@ -1217,7 +1237,7 @@ fn entrees_du_sommaire(
         }
     }
     // Numéros seuls avant les correspondances, hors paragraphes déjà retrouvés.
-    let numeros: Vec<Option<u32>> = retrouves
+    let numeros: Vec<Option<(Numerotation, u32)>> = retrouves
         .iter()
         .map(|(_, debut, _)| numero_seul_avant(blocs, *debut, &utilises).map(|(_, valeur)| valeur))
         .collect();
@@ -1344,7 +1364,9 @@ pub fn detecter_titres(
             };
             let nb_blocs = blocs.len();
             let (blocs, pts, refuses) = titres_par_candidats(blocs, &pages_som, candidat, niveau_1_pris);
-            debug_assert_eq!(blocs.len(), nb_blocs, "titres_par_candidats garde un bloc pour un bloc");
+            // Contrôle de la longueur seulement : l'ordre est garanti par construction
+            // (`titres_par_candidats` est un `map` sur les blocs).
+            debug_assert_eq!(blocs.len(), nb_blocs, "titres_par_candidats doit garder le nombre de blocs");
             points.extend(pts);
             illisibles = refuses;
             fusionner_titres_consecutifs(blocs, &proteges)
@@ -3228,7 +3250,7 @@ mod tests {
         );
         // Le titre est ancré au paragraphe du numéro, qui n'en reste pas un.
         assert_eq!(blocs.iter().find(|b| matches!(b, Bloc::Titre { .. })).unwrap().ancre(), numero_i);
-        assert!(blocs.iter().all(|b| !matches!(b, Bloc::Paragraphe(p) if NUMERO_SEUL.is_match(p.texte_brut().trim()))));
+        assert!(blocs.iter().all(|b| !matches!(b, Bloc::Paragraphe(p) if numero_seul(p.texte_brut().trim()).is_some())));
         // Les paragraphes du sommaire restent tels quels ; les 11 lignes de titre du corps
         // font 4 titres.
         assert_eq!(blocs.len(), nb_textes - 11 + 4);
@@ -3722,21 +3744,22 @@ mod tests {
 
     #[test]
     fn numero_seul_bien_forme() {
+        use Numerotation::{Arabe, Romaine};
         for (texte, valeur) in [
-            ("I", 1),
-            ("IV", 4),
-            ("IX.", 9),
-            ("XIV", 14),
-            ("XL", 40),
-            ("MCMXC", 1990),
-            ("DIX", 509),
-            ("1", 1),
-            ("12.", 12),
-            ("999", 999),
+            ("I", (Romaine, 1)),
+            ("IV", (Romaine, 4)),
+            ("IX.", (Romaine, 9)),
+            ("XIV", (Romaine, 14)),
+            ("XL", (Romaine, 40)),
+            ("MCMXC", (Romaine, 1990)),
+            ("DIX", (Romaine, 509)),
+            ("1", (Arabe, 1)),
+            ("12.", (Arabe, 12)),
+            ("999", (Arabe, 999)),
         ] {
             assert_eq!(numero_seul(texte), Some(valeur), "{texte}");
         }
-        for texte in ["", ".", "IIII", "IIX", "VX", "IL", "VV", "1984", "1984.", "I.I", "A", "iv", "12 3"] {
+        for texte in ["", ".", "0", "0.", "07", "IIII", "IIX", "VX", "IL", "VV", "1984", "1984.", "I.I", "A", "iv", "12 3"] {
             assert_eq!(numero_seul(texte), None, "{texte}");
         }
     }
@@ -3977,5 +4000,79 @@ mod tests {
         ];
         let t = titres(&fusionner_titres_consecutifs(blocs, &HashSet::from([1])));
         assert_eq!(t, ["UN", "DEUX", "TROIS"].map(|x| (2, x.to_string())));
+    }
+
+    #[test]
+    fn numeros_absorbes_tolerants() {
+        use Numerotation::{Arabe, Romaine};
+        let r = |n| Some((Romaine, n));
+        let a = |n| Some((Arabe, n));
+        // Un numéro sauté est toléré.
+        assert_eq!(numeros_en_suite(&[r(1), r(3), r(4)]), [true, true, true]);
+        // « I » manquant : la suite peut commencer à II.
+        assert_eq!(numeros_en_suite(&[r(2), r(3)]), [true, true]);
+        // Deux parties, chacune numérotée depuis I.
+        assert_eq!(numeros_en_suite(&[r(1), r(2), r(1), r(2)]), [true, true, true, true]);
+        // Un folio arabe après une suite romaine : refusé (genre et saut).
+        assert_eq!(numeros_en_suite(&[r(1), r(2), a(12)]), [true, true, false]);
+        // « 3 » arabe après I, II : refusé, le genre diffère.
+        assert_eq!(numeros_en_suite(&[r(1), r(2), a(3)]), [true, true, false]);
+        // 1, 2, puis « 12 » : refusé, trop loin.
+        assert_eq!(numeros_en_suite(&[a(1), a(2), a(12)]), [true, true, false]);
+        // Un numéro refusé ne change pas le précédent ; une entrée sans numéro non plus.
+        assert_eq!(numeros_en_suite(&[r(1), a(12), None, r(2), r(3)]), [true, false, false, true, true]);
+        // Le premier numéro absorbé vaut 1 ou 2.
+        assert_eq!(numeros_en_suite(&[r(9), r(10)]), [false, false]);
+    }
+
+    #[test]
+    fn ligne_numero_et_numero_de_page_du_sommaire_sautee() {
+        // « III 9 » : un numéro de moins de 100 suivi du numéro de page n'est pas une
+        // entrée ; l'entrée suivante « Gamma » absorbe le « III » du corps.
+        let sommaire = ["Alpha 5", "Beta 7", "III 9", "Gamma", "Delta 11"];
+        let corps_titres: [(u32, &[&str]); 4] = [
+            (5, &["I", "ALPHA"]),
+            (7, &["II", "BETA"]),
+            (9, &["III", "GAMMA"]),
+            (11, &["IV", "DELTA"]),
+        ];
+        let (blocs, _, _, _, _, _) = detecter_titres(livre_a_sommaire(2, &sommaire, &corps_titres), &[], 20, SourceTitres::Auto);
+        let t: Vec<String> = titres(&blocs).into_iter().map(|(_, x)| x).collect();
+        assert_eq!(t, ["I. ALPHA", "II. BETA", "III. GAMMA", "IV. DELTA"]);
+    }
+
+    #[test]
+    fn correspondance_transmise_incoherente_cherchee_de_nouveau() {
+        // `trouve` vise un paragraphe qui ne dit pas le titre, ou sort des blocs : le
+        // signet est cherché normalement, sans panique.
+        let blocs = || {
+            vec![
+                corps(4, &texte_long()),
+                para(5, "ALPHA", 12.0, false, 1),
+                corps(5, &texte_long()),
+            ]
+        };
+        for trouve in [(2, 3), (1, 1), (5, 7), (2, 1)] {
+            let cherche =
+                SignetCherche { signet: signet("Alpha", 1, 5), texte_impose: false, numero_avant: false, trouve: Some(trouve) };
+            let (blocs, points, produits) = titres_depuis_signets(blocs(), &[cherche], &BTreeSet::new());
+            assert!(points.is_empty(), "{trouve:?}");
+            assert!(matches!(&blocs[1], Bloc::Titre { texte, .. } if texte == "ALPHA"), "{trouve:?}");
+            assert!(matches!(&blocs[2], Bloc::Paragraphe(_)), "{trouve:?}");
+            assert_eq!(produits, HashSet::from([1]), "{trouve:?}");
+        }
+    }
+
+    #[test]
+    fn titre_insere_pour_un_signet_introuvable_protege() {
+        // « OMEGA » est introuvable : son titre est inséré avant le premier bloc de la page
+        // 5, et son indice dans les blocs rendus fait partie des titres produits.
+        let blocs = vec![corps(4, &texte_long()), para(5, "ALPHA", 12.0, false, 1), corps(5, &texte_long())];
+        let signets: Vec<SignetCherche> = vec![signet("Alpha", 1, 5).into(), signet("Omega", 1, 5).into()];
+        let (blocs, points, produits) = titres_depuis_signets(blocs, &signets, &BTreeSet::new());
+        assert_eq!(points.len(), 1);
+        assert_eq!(texte_de(&blocs[1]), "# Omega");
+        assert_eq!(texte_de(&blocs[2]), "# ALPHA");
+        assert_eq!(produits, HashSet::from([1, 2]));
     }
 }
