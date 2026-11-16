@@ -162,6 +162,7 @@ fn titres_depuis_signets(
     let mut utilises: HashSet<usize> = HashSet::new();
     // Insertions avant l'indice (blocs.len() = à la fin).
     let mut insertions: BTreeMap<usize, Vec<Bloc>> = BTreeMap::new();
+    let index = IndexTitres::new(&blocs);
 
     for signet in signets {
         let niveau = signet.niveau.clamp(1, 3);
@@ -169,9 +170,10 @@ fn titres_depuis_signets(
         let trouve = if cible.is_empty() {
             None
         } else {
+            let candidats = index.candidats(&cible);
             [signet.page, signet.page + 1]
                 .into_iter()
-                .find_map(|page| chercher_signet(&blocs, &cible, page, &utilises, pages_som))
+                .find_map(|page| chercher_signet(&blocs, &index, &candidats, &cible, page, &utilises, pages_som))
         };
         match trouve {
             Some((debut, fin, texte)) => {
@@ -229,14 +231,72 @@ fn titres_depuis_signets(
     (resultat, points)
 }
 
+/// Paragraphes du livre préparés pour retrouver un titre (signet ou entrée de
+/// résumé) sans parcourir tout le livre à chaque recherche.
+struct IndexTitres {
+    /// Par bloc : texte brut (sans espaces de bord), texte normalisé (`normaliser_titre`)
+    /// et nombre de mots du texte brut ; `None` hors paragraphe.
+    paragraphes: Vec<Option<(String, String, usize)>>,
+    /// Texte normalisé → paragraphes qui le portent.
+    par_texte: HashMap<String, Vec<usize>>,
+    /// Début (en mots entiers, strictement plus court) du texte normalisé d'un
+    /// paragraphe court → paragraphes.
+    par_debut: HashMap<String, Vec<usize>>,
+}
+
+impl IndexTitres {
+    fn new(blocs: &[Bloc]) -> Self {
+        let mut index = IndexTitres {
+            paragraphes: Vec::with_capacity(blocs.len()),
+            par_texte: HashMap::new(),
+            par_debut: HashMap::new(),
+        };
+        for (i, bloc) in blocs.iter().enumerate() {
+            let Bloc::Paragraphe(p) = bloc else {
+                index.paragraphes.push(None);
+                continue;
+            };
+            let texte = p.texte_brut().trim().to_string();
+            let norm = normaliser_titre(&texte);
+            let mots = nb_mots(&texte);
+            if !norm.is_empty() {
+                index.par_texte.entry(norm.clone()).or_default().push(i);
+                if mots <= MAX_MOTS_TITRE && p.nb_lignes <= MAX_LIGNES_TITRE {
+                    for (k, _) in norm.match_indices(' ') {
+                        index.par_debut.entry(norm[..k].to_string()).or_default().push(i);
+                    }
+                }
+            }
+            index.paragraphes.push(Some((texte, norm, mots)));
+        }
+        index
+    }
+
+    /// Paragraphes où une recherche de `cible` peut aboutir, dans l'ordre du livre :
+    /// ceux dont le texte normalisé est `cible` ou un début de `cible` en mots
+    /// entiers (titre sur plusieurs paragraphes), et les paragraphes courts qui
+    /// commencent par `cible`. Les autres ne peuvent jamais correspondre.
+    fn candidats(&self, cible: &str) -> Vec<usize> {
+        let debuts = cible.match_indices(' ').map(|(k, _)| &cible[..k]).chain([cible]);
+        let mut candidats: Vec<usize> =
+            debuts.filter_map(|d| self.par_texte.get(d)).flatten().copied().collect();
+        candidats.extend(self.par_debut.get(cible).into_iter().flatten().copied());
+        candidats.sort_unstable();
+        candidats.dedup();
+        candidats
+    }
+}
+
 /// Cherche le paragraphe (ou la suite de paragraphes) qui porte le titre du signet sur
 /// `page` ou la suivante. Les correspondances s'arrêtent à une frontière de mot ; une
 /// correspondance exacte est préférée à une simple correspondance de début. Une
 /// correspondance de début qui n'est pas courte (plus de 12 mots ou 3 lignes) est
 /// refusée ; une correspondance exacte ne peut pas avaler le corps du texte et n'a pas
-/// de limite.
+/// de limite. Seuls les `candidats` (voir `IndexTitres::candidats`) sont examinés.
 fn chercher_signet(
     blocs: &[Bloc],
+    index: &IndexTitres,
+    candidats: &[usize],
     cible: &str,
     page: u32,
     utilises: &HashSet<usize>,
@@ -247,30 +307,40 @@ fn chercher_signet(
     };
     let mut premier_prefixe = None;
     for page_cherchee in [page, page + 1] {
-        for debut in 0..blocs.len() {
+        for &debut in candidats {
             if blocs[debut].ancre().page != page_cherchee || !libre(debut) {
                 continue;
             }
-            let mut textes: Vec<String> = Vec::new();
+            let mut textes: Vec<&str> = Vec::new();
+            let mut norm = String::new();
+            let mut mots = 0;
             let mut lignes = 0;
             let mut fin = debut;
             loop {
                 let Bloc::Paragraphe(p) = &blocs[fin] else { break };
-                textes.push(p.texte_brut().trim().to_string());
+                let (texte, norm_bloc, mots_bloc) = index.paragraphes[fin].as_ref().expect("paragraphe indexé");
+                textes.push(texte);
+                // Le texte normalisé d'une suite de paragraphes est la suite de leurs
+                // textes normalisés non vides.
+                if !norm_bloc.is_empty() {
+                    if !norm.is_empty() {
+                        norm.push(' ');
+                    }
+                    norm.push_str(norm_bloc);
+                }
+                mots += mots_bloc;
                 lignes += p.nb_lignes;
                 fin += 1;
-                let texte = textes.join(" ");
-                let norm = normaliser_titre(&texte);
                 if norm.is_empty() {
                     break;
                 }
-                let court = nb_mots(&texte) <= MAX_MOTS_TITRE && lignes <= MAX_LIGNES_TITRE;
+                let court = mots <= MAX_MOTS_TITRE && lignes <= MAX_LIGNES_TITRE;
                 if norm == cible {
-                    return Some((debut, fin, texte));
+                    return Some((debut, fin, textes.join(" ")));
                 }
                 if norm.strip_prefix(cible).is_some_and(|reste| reste.starts_with(' ')) {
                     if court && premier_prefixe.is_none() {
-                        premier_prefixe = Some((debut, fin, texte));
+                        premier_prefixe = Some((debut, fin, textes.join(" ")));
                     }
                     break;
                 }
@@ -549,6 +619,7 @@ fn resume_sans_numeros(blocs: &[Bloc], pages_som: &BTreeSet<u32>) -> (BTreeSet<u
 
     let mut pages_resume = BTreeSet::new();
     let mut pseudo = Vec::new();
+    let index = IndexTitres::new(blocs);
     for suite in suites {
         let textes: Vec<String> = suite
             .iter()
@@ -577,9 +648,18 @@ fn resume_sans_numeros(blocs: &[Bloc], pages_som: &BTreeSet<u32>) -> (BTreeSet<u
             if cible.is_empty() {
                 continue;
             }
-            let trouve = par_page
-                .range(depart..)
-                .find_map(|(page, _)| chercher_signet(blocs, &cible, *page, &utilises, pages_som));
+            // Seules les pages qui portent un candidat (ou dont la suivante en porte
+            // un) peuvent aboutir : elles sont essayées dans l'ordre, comme le livre.
+            let candidats = index.candidats(&cible);
+            let pages: BTreeSet<u32> = candidats
+                .iter()
+                .map(|&i| blocs[i].ancre().page)
+                .flat_map(|page| [page.saturating_sub(1), page])
+                .filter(|page| *page >= depart && par_page.contains_key(page))
+                .collect();
+            let trouve = pages.into_iter().find_map(|page| {
+                chercher_signet(blocs, &index, &candidats, &cible, page, &utilises, pages_som)
+            });
             if let Some((debut, fin_bloc, _)) = trouve {
                 let page = blocs[debut].ancre().page;
                 utilises.extend(debut..fin_bloc);
@@ -1151,6 +1231,31 @@ mod tests {
         assert_eq!(n1, attendu.map(|(t, p)| (t.to_string(), p)));
         assert!(titres(&blocs).iter().filter(|(_, x)| x.contains("FÉVRIER")).all(|(n, _)| *n == 2));
         assert!(blocs.iter().all(|b| b.ancre().page > 8 || !matches!(b, Bloc::Titre { .. })));
+    }
+
+    /// Garde-fou de coût (relecture finale, I2) : des pages de lignes courtes (poème,
+    /// liste) sont candidates au résumé sans numéros, et chacune de leurs lignes est
+    /// cherchée dans la suite du livre. Ce cas prenait 10 à 108 s (en --release) ;
+    /// il doit rester linéaire (environ 0,1 s en --release, 1 s en debug).
+    #[test]
+    fn resume_sans_numeros_en_temps_lineaire() {
+        for (courtes, prose) in [(5, 760), (60, 700), (400, 400)] {
+            let mut blocs = Vec::new();
+            for page in 1..=courtes {
+                for i in 0..20 {
+                    blocs.push(para(page, &format!("Vers {i} de la page {page} du poème"), 12.0, false, 1));
+                }
+            }
+            for page in courtes + 1..=courtes + prose {
+                for _ in 0..8 {
+                    blocs.push(corps(page, &texte_long()));
+                }
+            }
+            let debut = std::time::Instant::now();
+            let _ = detecter_titres(blocs, &[], courtes + prose, SourceTitres::Auto);
+            let duree = debut.elapsed();
+            assert!(duree.as_secs_f32() < 5.0, "{courtes} pages courtes + {prose} : {duree:?}");
+        }
     }
 
     #[test]
