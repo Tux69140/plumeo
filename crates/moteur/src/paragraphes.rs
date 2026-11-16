@@ -125,7 +125,9 @@ pub(crate) fn finit_par_points_de_conduite(texte: &str) -> bool {
 
 /// Ligne d'entrée de sommaire : elle finit par un numéro de page précédé de points de
 /// conduite ou d'un grand blanc (écart avec le mot précédent supérieur à `GRAND_BLANC`
-/// de la largeur du bloc).
+/// de la largeur du bloc). Après un grand blanc, le numéro doit en plus atteindre le
+/// bord droit du bloc (même tolérance que `ligne_pleine`) : les numéros de page d'un
+/// sommaire sont alignés à droite.
 fn ligne_entree(l: &Ligne, bloc: BlocTexte) -> bool {
     if finit_par_points_de_conduite(&l.texte()) {
         return true;
@@ -135,7 +137,10 @@ fn ligne_entree(l: &Ligne, bloc: BlocTexte) -> bool {
         return false;
     }
     let (avant, numero) = (&l.mots[n - 2], &l.mots[n - 1]);
-    NUMERO_DE_PAGE.is_match(numero.texte.trim()) && numero.rect.x0 - avant.rect.x1 > GRAND_BLANC * (bloc.x1 - bloc.x0)
+    let largeur = bloc.x1 - bloc.x0;
+    NUMERO_DE_PAGE.is_match(numero.texte.trim())
+        && numero.rect.x0 - avant.rect.x1 > GRAND_BLANC * largeur
+        && bloc.x1 - numero.rect.x1 <= 0.15 * largeur
 }
 
 /// Faut-il couper le paragraphe entre `prec` et `l` ? `premiere` est la première
@@ -825,6 +830,31 @@ mod tests {
         let lignes = vec![notes, ligne_reguliere("Ouvrages de Rudolf Steiner disponibles en langue", 0.1, 0.9, 0.13)];
         let p = paragraphes_page(&lignes, 3, Moitie::Droite, BLOC, &Vocabulaire::default());
         assert_eq!(textes(&p), vec!["Notes 175", "Ouvrages de Rudolf Steiner disponibles en langue"]);
+    }
+
+    #[test]
+    fn limites_du_grand_blanc() {
+        let v = Vocabulaire::default();
+        // Deux mots, écart un peu sous 10 % de la largeur (0,07 pour 0,08) : pas d'entrée.
+        let total = ligne_de_mots(vec![
+            mot("Total", 0.1, 0.5, 0.10, 12.0, false, false),
+            mot("1903", 0.57, 0.9, 0.10, 12.0, false, false),
+        ]);
+        assert!(!ligne_entree(&total, BLOC));
+        let lignes = vec![total, ligne_reguliere("devant les membres de la société", 0.1, 0.9, 0.13)];
+        assert_eq!(paragraphes_page(&lignes, 3, Moitie::Entiere, BLOC, &v).len(), 1);
+        // Grand blanc, mais numéro loin du bord droit du bloc : pas d'entrée.
+        let milieu = ligne_de_mots(vec![
+            mot("Notes", 0.1, 0.18, 0.10, 12.0, false, false),
+            mot("175", 0.40, 0.44, 0.10, 12.0, false, false),
+        ]);
+        assert!(!ligne_entree(&milieu, BLOC));
+        // Numéro aligné à droite après un grand blanc : entrée.
+        let notes = ligne_de_mots(vec![
+            mot("Notes", 0.1, 0.18, 0.10, 12.0, false, false),
+            mot("175", 0.86, 0.9, 0.10, 12.0, false, false),
+        ]);
+        assert!(ligne_entree(&notes, BLOC));
     }
 
     #[test]
