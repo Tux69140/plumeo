@@ -318,6 +318,11 @@ fn dernier_caractere_de_texte(segments: &[Segment]) -> Option<char> {
     })
 }
 
+/// Le texte finit-il ouvert (sans ponctuation finale), coupé par un saut de page ?
+pub(crate) fn fin_ouverte(segments: &[Segment]) -> bool {
+    dernier_caractere_de_texte(segments).is_some_and(|c| !PONCTUATION_FINALE.contains(&c))
+}
+
 /// Colle les segments `suite` à la fin de `segments` : césure recollée, trait d'union
 /// gardé, ou une espace.
 pub(crate) fn joindre(segments: &mut Vec<Segment>, suite: Vec<Segment>, vocab: &Vocabulaire) {
@@ -392,8 +397,7 @@ pub fn raccorder_pages(
         let precedent = sortie.iter_mut().rev().find(|b| !matches!(b, Bloc::Note { .. }));
         if let Some(Bloc::Paragraphe(p)) = precedent {
             let autre_page = fin.is_some_and(|f| f != debut_suite);
-            let ouvert = dernier_caractere_de_texte(&p.segments)
-                .is_some_and(|c| !PONCTUATION_FINALE.contains(&c));
+            let ouvert = fin_ouverte(&p.segments);
             let sommaire = pages_sommaire.contains(&p.ancre.page) || pages_sommaire.contains(&suite.ancre.page);
             let entrees = enumeration(&suite.texte_brut()).is_some_and(|e| enumeration(&p.texte_brut()) == Some(e));
             let isole = isoles.contains(&p.ancre) || isoles.contains(&suite.ancre);

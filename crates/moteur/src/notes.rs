@@ -14,7 +14,7 @@ use regex::Regex;
 use crate::blocs::{Bloc, Paragraphe, Segment};
 use crate::lignes::Ligne;
 use crate::modele::{Ancre, Moitie, Rect};
-use crate::paragraphes::{Vocabulaire, joindre, segments_des_lignes};
+use crate::paragraphes::{Vocabulaire, fin_ouverte, joindre, segments_des_lignes};
 use crate::points::{GenrePoint, PointAVerifier};
 use crate::titres::normaliser;
 use crate::zones::{Retrait, Role};
@@ -432,7 +432,8 @@ pub fn notes_regroupees(
     let mut debut_portee = 0;
     let mut i = 0;
     while i < blocs.len() {
-        let debut_notes = if est_debut_de_section(&blocs[i]) {
+        let implicite = !est_debut_de_section(&blocs[i]);
+        let debut_notes = if !implicite {
             let (ancre, texte) = match &blocs[i] {
                 Bloc::Titre { texte, ancre, .. } => (*ancre, texte.clone()),
                 Bloc::Paragraphe(p) => (p.ancre, p.texte_brut()),
@@ -448,18 +449,31 @@ pub fn notes_regroupees(
             i += 1;
             continue;
         };
-        let fin = (i + 1..blocs.len()).find(|&j| termine_la_section(&blocs, j)).unwrap_or(blocs.len());
+        let mut fin = (i + 1..blocs.len()).find(|&j| termine_la_section(&blocs, j)).unwrap_or(blocs.len());
 
         let mut notes: Vec<NoteEnAttente> = Vec::new();
         let mut elements: Vec<Element> = Vec::new();
-        for bloc in &blocs[debut_notes..fin] {
+        // (Demi-)page du dernier paragraphe pris dans les notes.
+        let mut derniere: Option<(u32, Moitie)> = None;
+        for (j, bloc) in blocs.iter().enumerate().take(fin).skip(debut_notes) {
             let Bloc::Paragraphe(p) = bloc else {
                 elements.push(Element::Bloc(bloc.clone()));
                 continue;
             };
+            let page = (p.ancre.page, p.ancre.moitie);
             let nouvelles = if let Some((m, segments)) = extraire_marqueur(&p.segments) {
                 notes_enchainees(m, segments)
             } else if let Some(note) = notes.last_mut() {
+                // Section implicite : un paragraphe sans marqueur ne continue la note que
+                // si elle est encore vide (marqueur seul) ou si elle reste ouverte en bas
+                // de (demi-)page et qu'il ouvre la suivante. Sinon la section s'arrête là.
+                if implicite
+                    && !note.segments.is_empty()
+                    && !(derniere != Some(page) && fin_ouverte(&note.segments))
+                {
+                    fin = j;
+                    break;
+                }
                 // Suite de la note précédente (ou son texte, si son marqueur était seul),
                 // qui peut contenir le début de la suivante.
                 if note.segments.is_empty() {
@@ -478,6 +492,7 @@ pub fn notes_regroupees(
                 elements.push(Element::Note(notes.len()));
                 notes.push(NoteEnAttente::nouvelle(m, segments, p.ancre, p.clone()));
             }
+            derniere = Some(page);
         }
 
         for bloc in &mut sortie[debut_portee..] {
@@ -1053,14 +1068,113 @@ mod tests {
     #[test]
     fn note_3_au_8e_bloc_suivant_ouvre_la_section() {
         // Après le point 1 : point 2 (1er bloc), 6 paragraphes (2e à 7e), point 3 (8e bloc).
+        // Chaque paragraphe intercalé ouvre une page et continue la note 2, restée ouverte.
         let mut blocs = vec![appels(&["1", "2", "3"])];
         blocs.extend(liste(2));
-        blocs.extend((0..6).map(|_| bloc_para(vec![texte("suite.")], 5, 0.5)));
-        blocs.push(bloc_para(vec![texte("3. Point 3")], 6, 0.1));
+        blocs.extend((5..11).map(|page| bloc_para(vec![texte("suite de la note")], page, 0.1)));
+        blocs.push(bloc_para(vec![texte("3. Point 3")], 11, 0.2));
         let (sortie, _, points) = notes_regroupees(blocs, &mut Etiqueteuse::new(), &Vocabulaire::default());
         assert!(points.is_empty(), "{points:?}");
         let marqueurs: Vec<String> = notes_du_livre(&sortie).into_iter().map(|(_, m, _)| m).collect();
         assert_eq!(marqueurs, ["1", "2", "3"]);
+    }
+
+    /// Paragraphe sur la moitié droite d'une double page.
+    fn bloc_droite(t: &str, page: u32, y0: f32) -> Bloc {
+        Bloc::Paragraphe(Paragraphe {
+            ancre: Ancre::depuis(page, Moitie::Droite, rect(y0)),
+            ..para(vec![texte(t)], page, y0)
+        })
+    }
+
+    /// Paragraphes rendus tels quels (texte et ancre), dans l'ordre.
+    fn paragraphes(blocs: &[Bloc]) -> Vec<(String, Ancre)> {
+        blocs
+            .iter()
+            .filter_map(|b| match b {
+                Bloc::Paragraphe(p) => Some((p.texte_brut(), p.ancre)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn section_implicite_marqueur_seul_puis_texte_puis_corps() {
+        // Règle (a) : le paragraphe sans marqueur devient le texte d'une note encore vide
+        // (marqueur seul, ou « [n+1] » détaché de la fin de la note précédente). Un
+        // second paragraphe sans marqueur termine la section : il reste du corps.
+        let blocs = vec![
+            appels(&["[1]", "[2]", "[3]", "[4]"]),
+            bloc_para(vec![texte("[1]")], 2, 0.1),
+            bloc_para(vec![texte("Texte un.")], 2, 0.15),
+            bloc_para(vec![texte("[2]")], 2, 0.2),
+            bloc_para(vec![texte("Texte deux.")], 2, 0.25),
+            bloc_para(vec![texte("[3]")], 2, 0.3),
+            bloc_para(vec![texte("Texte trois. [4]")], 2, 0.35),
+            bloc_para(vec![texte("Texte quatre.")], 2, 0.4),
+            bloc_para(vec![texte("Corps qui suit.")], 2, 0.5),
+            bloc_para(vec![texte("Autre corps.")], 2, 0.6),
+        ];
+        let attendu = paragraphes(&blocs[8..]);
+        let (sortie, _, points) = notes_regroupees(blocs, &mut Etiqueteuse::new(), &Vocabulaire::default());
+        assert!(points.is_empty(), "{points:?}");
+        let textes: Vec<String> = notes_du_livre(&sortie).into_iter().map(|(_, _, t)| t).collect();
+        assert_eq!(textes, ["Texte un.", "Texte deux.", "Texte trois.", "Texte quatre."]);
+        assert_eq!(paragraphes(&sortie)[1..], attendu[..]);
+    }
+
+    #[test]
+    fn section_implicite_note_coupee_par_la_page() {
+        // Règle (b) : le premier paragraphe de la page suivante continue une note
+        // restée ouverte ; le paragraphe d'après termine la section.
+        let blocs = vec![
+            appels(&["1", "2", "3"]),
+            bloc_para(vec![texte("1. Texte un.")], 9, 0.7),
+            bloc_para(vec![texte("2. Texte deux.")], 9, 0.8),
+            bloc_para(vec![texte("3. Texte trois qui")], 9, 0.9),
+            bloc_para(vec![texte("continue page suivante.")], 10, 0.1),
+            bloc_para(vec![texte("Corps.")], 10, 0.2),
+        ];
+        let attendu = paragraphes(&blocs[5..]);
+        let (sortie, _, points) = notes_regroupees(blocs, &mut Etiqueteuse::new(), &Vocabulaire::default());
+        assert!(points.is_empty(), "{points:?}");
+        assert_eq!(texte_note(&sortie[3]), "Texte trois qui continue page suivante.");
+        assert_eq!(paragraphes(&sortie)[1..], attendu[..]);
+
+        // Note fermée en bas de page : le premier paragraphe de la page suivante est du corps.
+        let blocs = vec![
+            appels(&["1", "2", "3"]),
+            bloc_para(vec![texte("1. Texte un.")], 9, 0.7),
+            bloc_para(vec![texte("2. Texte deux.")], 9, 0.8),
+            bloc_para(vec![texte("3. Texte trois.")], 9, 0.9),
+            bloc_para(vec![texte("Corps de la page suivante.")], 10, 0.1),
+        ];
+        let attendu = paragraphes(&blocs[4..]);
+        let (sortie, _, _) = notes_regroupees(blocs, &mut Etiqueteuse::new(), &Vocabulaire::default());
+        assert_eq!(notes_du_livre(&sortie).len(), 3);
+        assert_eq!(paragraphes(&sortie)[1..], attendu[..]);
+    }
+
+    #[test]
+    fn bibliographie_numerotee_puis_corps_de_la_demi_page_suivante() {
+        // Cas du type de Connaissance p. 95d-96d, dans une section implicite : une
+        // bibliographie « 1 … 29 » ouvre la section (appels 1, 2, 3 dans la portée) ;
+        // l'épigraphe de la demi-page suivante reste du corps, chaque paragraphe avec
+        // son ancre.
+        let mut blocs = vec![appels(&["1", "2", "3"])];
+        blocs.extend((1..=29).map(|k| bloc_droite(&format!("{k} Ouvrage {k} (1904). (T)"), 95, 0.1 + 0.02 * k as f32)));
+        let corps = [
+            "C'est ainsi que la pensée abstraite",
+            "devient vivante.",
+            "R. Steiner",
+            "La Philosophie de la Liberté",
+        ];
+        blocs.extend(corps.iter().enumerate().map(|(k, t)| bloc_droite(t, 96, 0.2 + 0.1 * k as f32)));
+        let attendu = paragraphes(&blocs[30..]);
+        let (sortie, _, _) = notes_regroupees(blocs, &mut Etiqueteuse::new(), &Vocabulaire::default());
+        let rendus = paragraphes(&sortie);
+        assert_eq!(rendus[rendus.len() - corps.len()..], attendu[..]);
+        assert!(matches!(sortie.last(), Some(Bloc::Paragraphe(p)) if p.texte_brut() == "La Philosophie de la Liberté"));
     }
 
     #[test]
