@@ -123,24 +123,32 @@ pub(crate) fn finit_par_points_de_conduite(texte: &str) -> bool {
     ENTREE_A_POINTS.is_match(texte)
 }
 
+/// Un grand blanc dépasse aussi ce multiple du plus grand des autres écarts entre mots de
+/// la ligne : une ligne justifiée, aux espaces étirées de façon égale, n'en a pas.
+const GRAND_BLANC_RELATIF: f32 = 3.0;
+
 /// Ligne d'entrée de sommaire : elle finit par un numéro de page précédé de points de
-/// conduite ou d'un grand blanc (écart avec le mot précédent supérieur à `GRAND_BLANC`
-/// de la largeur du bloc). Après un grand blanc, le numéro doit en plus atteindre le
-/// bord droit du bloc (même tolérance que `ligne_pleine`) : les numéros de page d'un
-/// sommaire sont alignés à droite.
+/// conduite ou d'un grand blanc. Le grand blanc (écart entre le numéro et le mot
+/// précédent) dépasse `GRAND_BLANC` de la largeur du bloc et `GRAND_BLANC_RELATIF` fois
+/// le plus grand des autres écarts entre mots séparés par une espace (exposants exclus).
 fn ligne_entree(l: &Ligne, bloc: BlocTexte) -> bool {
     if finit_par_points_de_conduite(&l.texte()) {
         return true;
     }
-    let n = l.mots.len();
-    if n < 2 || l.exposants.contains(&(n - 1)) {
+    if l.mots.is_empty() || l.exposants.contains(&(l.mots.len() - 1)) {
         return false;
     }
-    let (avant, numero) = (&l.mots[n - 2], &l.mots[n - 1]);
-    let largeur = bloc.x1 - bloc.x0;
+    let mots: Vec<_> = l.mots.iter().enumerate().filter(|(i, _)| !l.exposants.contains(i)).map(|(_, m)| m).collect();
+    let [.., avant, numero] = mots.as_slice() else { return false };
+    let blanc = numero.rect.x0 - avant.rect.x1;
+    let autres = mots[..mots.len() - 1]
+        .windows(2)
+        .filter(|w| w[1].espace_avant)
+        .map(|w| w[1].rect.x0 - w[0].rect.x1)
+        .fold(0.0_f32, f32::max);
     NUMERO_DE_PAGE.is_match(numero.texte.trim())
-        && numero.rect.x0 - avant.rect.x1 > GRAND_BLANC * largeur
-        && bloc.x1 - numero.rect.x1 <= 0.15 * largeur
+        && blanc > GRAND_BLANC * (bloc.x1 - bloc.x0)
+        && blanc > GRAND_BLANC_RELATIF * autres
 }
 
 /// Faut-il couper le paragraphe entre `prec` et `l` ? `premiere` est la première
@@ -843,18 +851,44 @@ mod tests {
         assert!(!ligne_entree(&total, BLOC));
         let lignes = vec![total, ligne_reguliere("devant les membres de la société", 0.1, 0.9, 0.13)];
         assert_eq!(paragraphes_page(&lignes, 3, Moitie::Entiere, BLOC, &v).len(), 1);
-        // Grand blanc, mais numéro loin du bord droit du bloc : pas d'entrée.
-        let milieu = ligne_de_mots(vec![
-            mot("Notes", 0.1, 0.18, 0.10, 12.0, false, false),
-            mot("175", 0.40, 0.44, 0.10, 12.0, false, false),
-        ]);
-        assert!(!ligne_entree(&milieu, BLOC));
-        // Numéro aligné à droite après un grand blanc : entrée.
+        // Deux mots : pas d'autre écart, le seuil de 10 % suffit.
         let notes = ligne_de_mots(vec![
             mot("Notes", 0.1, 0.18, 0.10, 12.0, false, false),
             mot("175", 0.86, 0.9, 0.10, 12.0, false, false),
         ]);
         assert!(ligne_entree(&notes, BLOC));
+    }
+
+    #[test]
+    fn ligne_justifiee_a_grands_ecarts_egaux_ne_coupe_pas() {
+        // Trois mots étirés à écarts égaux de 0,15 (plus de 10 % de la largeur).
+        let jean = ligne_de_mots(vec![
+            mot("Jean", 0.1, 0.2, 0.10, 12.0, false, false),
+            mot("disait", 0.35, 0.45, 0.10, 12.0, false, false),
+            mot("1903", 0.6, 0.9, 0.10, 12.0, false, false),
+        ]);
+        assert!(!ligne_entree(&jean, BLOC));
+        let lignes = vec![jean, ligne_reguliere("devant les membres de la société", 0.1, 0.9, 0.13)];
+        assert_eq!(paragraphes_page(&lignes, 3, Moitie::Entiere, BLOC, &Vocabulaire::default()).len(), 1);
+    }
+
+    #[test]
+    fn grand_blanc_apres_des_espaces_normales_coupe() {
+        // « Première conférence, Berlin, 27 novembre 1903 » (écarts de 0,01) + blanc + « 7 ».
+        let mut mots = Vec::new();
+        let mut x = 0.1;
+        for texte in ["Première", "conférence,", "Berlin,", "27", "novembre", "1903"] {
+            mots.push(mot(texte, x, x + 0.07, 0.10, 12.0, false, true));
+            x += 0.08;
+        }
+        mots.push(mot("7", 0.88, 0.9, 0.10, 12.0, false, false));
+        let lignes = vec![
+            ligne_de_mots(mots),
+            ligne_reguliere("Les bases d'une théorie de la connaissance", 0.1, 0.9, 0.13),
+        ];
+        assert!(ligne_entree(&lignes[0], BLOC));
+        let p = paragraphes_page(&lignes, 3, Moitie::Droite, BLOC, &Vocabulaire::default());
+        assert_eq!(p.len(), 2);
     }
 
     #[test]
