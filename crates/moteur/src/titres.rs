@@ -1021,7 +1021,8 @@ const TITRES_DE_SOMMAIRE: [&str; 2] = ["table des matieres", "sommaire"];
 /// niveau 1, s'il porte `titre_livre`) n'est jamais visé. Sur ces pages, chaque paragraphe
 /// qui vise un titre (sans appel de note) devient une `EntreeSommaire` (cible : identifiant
 /// du titre, voir `markdown::ancre_titre`) et le paragraphe « Table des matières » ou
-/// « Sommaire » placé juste avant la première entrée devient un titre de niveau 1.
+/// « Sommaire » placé juste avant la première entrée (notes et sauts passés), s'il n'est
+/// pas lui-même une entrée, devient un titre de niveau 1.
 /// Renvoie aussi un point `Sommaire` par page de sommaire.
 pub fn sommaire_cliquable(mut blocs: Vec<Bloc>, titre_livre: &str) -> (Vec<Bloc>, Vec<PointAVerifier>) {
     let titre_livre = normaliser_titre(titre_livre.trim());
@@ -1082,8 +1083,12 @@ pub fn sommaire_cliquable(mut blocs: Vec<Bloc>, titre_livre: &str) -> (Vec<Bloc>
     // Titre du sommaire, avant la première entrée de chaque suite de pages.
     for page in pages.iter().filter(|p| p.checked_sub(1).is_none_or(|p| !pages.contains(&p))) {
         let premiere = par_page[page].iter().find_map(|&(i, c)| c.map(|_| i)).expect("page avec entrées");
-        let avant = blocs[..premiere].iter().rposition(|b| !matches!(b, Bloc::Note { .. }));
+        // Les notes et les sauts (titre seul sur une page courte) sont passés ; un
+        // paragraphe qui est lui-même une entrée (suite de sommaire après une page
+        // vide) reste une entrée.
+        let avant = blocs[..premiere].iter().rposition(|b| !matches!(b, Bloc::Note { .. } | Bloc::Saut { .. }));
         if let Some(j) = avant
+            && !entrees.contains_key(&j)
             && let Bloc::Paragraphe(p) = &blocs[j]
             && TITRES_DE_SOMMAIRE.contains(&normaliser(&p.texte_brut()).as_str())
         {
@@ -1102,7 +1107,7 @@ pub fn sommaire_cliquable(mut blocs: Vec<Bloc>, titre_livre: &str) -> (Vec<Bloc>
         })
         .collect();
     for (i, titre) in entrees {
-        let Bloc::Paragraphe(p) = &mut blocs[i] else { unreachable!("entrée de sommaire hors paragraphe") };
+        let Bloc::Paragraphe(p) = &mut blocs[i] else { continue };
         let segments = std::mem::take(&mut p.segments);
         blocs[i] = Bloc::EntreeSommaire { segments, cible: ids[&titre].clone(), ancre: p.ancre };
     }
@@ -2106,6 +2111,53 @@ mod tests {
         ];
         let (blocs, _) = sommaire_cliquable(blocs, "");
         assert_eq!(rendu_sommaire(&blocs)[3..], ["[Un](#t-un)", "[Deux](#t-deux)", "[Trois](#t-trois)"]);
+    }
+
+    #[test]
+    fn entree_avant_une_suite_de_sommaire_n_en_devient_pas_le_titre() {
+        // La dernière entrée de la page 3 s'appelle « Table des matières » ; la page 4
+        // est vide, la page 5 reprend une suite d'entrées : rien ne doit paniquer.
+        let blocs = vec![
+            para_en(3, 100, "Un", false),
+            para_en(3, 140, "Deux", false),
+            para_en(3, 180, "Trois", false),
+            para_en(3, 220, "Table des matières", false),
+            para_en(5, 100, "Quatre", false),
+            para_en(5, 140, "Cinq", false),
+            para_en(5, 180, "Six", false),
+            titre_en(1, 6, "Un"),
+            titre_en(1, 7, "Deux"),
+            titre_en(1, 8, "Trois"),
+            titre_en(1, 9, "Quatre"),
+            titre_en(1, 10, "Cinq"),
+            titre_en(1, 11, "Six"),
+            titre_en(1, 20, "Table des matières"),
+        ];
+        let (blocs, _) = sommaire_cliquable(blocs, "");
+        assert_eq!(
+            rendu_sommaire(&blocs)[..7],
+            [
+                "[Un](#t-un)",
+                "[Deux](#t-deux)",
+                "[Trois](#t-trois)",
+                "[Table des matières](#t-table-des-matières)",
+                "[Quatre](#t-quatre)",
+                "[Cinq](#t-cinq)",
+                "[Six](#t-six)",
+            ]
+        );
+    }
+
+    #[test]
+    fn titre_du_sommaire_seul_sur_sa_page_avant_un_saut() {
+        let mut blocs = livre_avec_sommaire();
+        // « Table des matières » seule sur la page 1 (page courte), saut, puis les entrées.
+        if let Bloc::Paragraphe(p) = &mut blocs[1] {
+            p.ancre.page = 1;
+        }
+        blocs.insert(2, Bloc::Saut { ancre: ancre(2) });
+        let (blocs, _) = sommaire_cliquable(blocs, "Mon livre");
+        assert_eq!(rendu_sommaire(&blocs)[1..4], ["# Table des matières", "* * *", "[1. Premier chapitre ........ 5](#t-1-premier-chapitre)"]);
     }
 
     #[test]
