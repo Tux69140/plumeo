@@ -925,6 +925,15 @@ fn etendue_entree(textes: &[&str]) -> usize {
     n
 }
 
+/// `avant` finit-il par une césure que `suite` complète : lettre + « - », la suite
+/// commençant par une minuscule (« caté- » + « gories ») ?
+fn fin_de_cesure(avant: &str, suite: &str) -> bool {
+    let mut fin = avant.trim_end().chars().rev();
+    fin.next() == Some('-')
+        && fin.next().is_some_and(char::is_alphabetic)
+        && suite.trim_start().chars().next().is_some_and(char::is_lowercase)
+}
+
 /// Texte d'une entrée de sommaire faite des paragraphes `textes` : leurs textes séparés
 /// par une espace, une césure de fin de paragraphe (lettre + « - », la suite commençant
 /// par une minuscule) recollée sans tiret (« caté- » + « gories » → « catégories »), et
@@ -932,11 +941,7 @@ fn etendue_entree(textes: &[&str]) -> usize {
 fn texte_entree(textes: &[&str]) -> String {
     let mut joint = String::new();
     for texte in textes.iter().map(|t| t.trim()).filter(|t| !t.is_empty()) {
-        let mut avant = joint.chars().rev();
-        let cesure = avant.next() == Some('-')
-            && avant.next().is_some_and(char::is_alphabetic)
-            && texte.chars().next().is_some_and(char::is_lowercase);
-        if cesure {
+        if fin_de_cesure(&joint, texte) {
             joint.pop();
         } else if !joint.is_empty() {
             joint.push(' ');
@@ -1227,83 +1232,163 @@ static NUMERO_FINAL: LazyLock<Regex> = LazyLock::new(|| {
 /// Titres d'un sommaire imprimé (paragraphe placé juste avant la première entrée).
 const TITRES_DE_SOMMAIRE: [&str; 2] = ["table des matieres", "sommaire"];
 
-/// Sommaire imprimé rendu cliquable. Une page de sommaire est une page dont au moins
-/// 3 paragraphes, et au moins la moitié, portent le texte d'un titre situé sur une
-/// autre page (`normaliser_titre`, sans le numéro de page final ni les points de
-/// conduite) ; la page qui suit directement une page de sommaire en est aussi une si
-/// tous ses paragraphes en portent un. Le titre visé est le premier de ce texte après la
-/// page de l'entrée, à défaut le premier du livre ; le titre du livre (premier titre de
-/// niveau 1, s'il porte `titre_livre`) n'est jamais visé. Sur ces pages, chaque paragraphe
-/// qui vise un titre (sans appel de note) devient une `EntreeSommaire` (cible : identifiant
-/// du titre, voir `markdown::ancre_titre`) et le paragraphe « Table des matières » ou
-/// « Sommaire » placé juste avant la première entrée (notes et sauts passés), s'il n'est
-/// pas lui-même une entrée, devient un titre de niveau 1.
-/// Renvoie aussi un point `Sommaire` par page de sommaire.
+/// Sommaire imprimé rendu cliquable. Une entrée est faite de 1 à 3 paragraphes
+/// consécutifs d'une même (demi-)page (`etendue_entree`, texte joint `texte_entree` :
+/// césure recollée, sans le numéro de page final ni les points de conduite) qui portent
+/// le texte d'un titre situé sur une autre page (`normaliser_titre`), ou ce texte sans son
+/// numéro en tête (`NUMERO_EN_TETE` : « Les bases » vise « I. LES BASES ») ; l'entrée la
+/// plus longue qui vise un titre après sa page l'emporte, à défaut la plus longue qui en
+/// vise un. Une (demi-)page de sommaire est une (demi-)page dont au moins 3 paragraphes,
+/// et au moins la moitié, sont couverts par des entrées ; la (demi-)page qui suit
+/// directement une (demi-)page de sommaire en est aussi une si tous ses paragraphes le
+/// sont. Le titre visé est le premier de ce texte après la page de l'entrée, à défaut le
+/// premier du livre, en sautant les titres déjà visés par une entrée précédente tant
+/// qu'il en reste un libre (titres homonymes visés dans l'ordre) ; le titre du livre
+/// (premier titre de niveau 1, s'il porte `titre_livre`) n'est jamais visé. Sur ces
+/// (demi-)pages, chaque entrée (sans appel de note) devient une seule `EntreeSommaire`
+/// (cible : identifiant du titre, voir `markdown::ancre_titre`) qui garde tout le texte de
+/// ses paragraphes, joints par une espace ou recollés sur une césure, ancrée au premier,
+/// rectangle étendu aux autres ; le paragraphe « Table des matières » ou « Sommaire »
+/// placé juste avant la première entrée (notes et sauts passés), s'il n'est pas lui-même
+/// dans une entrée, devient un titre de niveau 1.
+/// Renvoie aussi un point `Sommaire` par page qui contient un sommaire.
 pub fn sommaire_cliquable(mut blocs: Vec<Bloc>, titre_livre: &str) -> (Vec<Bloc>, Vec<PointAVerifier>) {
     let titre_livre = normaliser_titre(titre_livre.trim());
     let livre = blocs.iter().position(|b| matches!(b, Bloc::Titre { niveau: 1, .. })).filter(|&i| match &blocs[i] {
         Bloc::Titre { texte, .. } => !titre_livre.is_empty() && normaliser_titre(texte) == titre_livre,
         _ => false,
     });
-    // Texte normalisé → (indice, page) des titres qui le portent, dans l'ordre du livre.
+    // Texte normalisé → (indice, page) des titres qui le portent, dans l'ordre du livre ;
+    // `sans_numero` : de même pour le texte des titres numérotés, sans le numéro en tête.
     let mut titres: HashMap<String, Vec<(usize, u32)>> = HashMap::new();
+    let mut sans_numero: HashMap<String, Vec<(usize, u32)>> = HashMap::new();
     for (i, bloc) in blocs.iter().enumerate() {
         if let Bloc::Titre { texte, ancre, .. } = bloc
             && Some(i) != livre
         {
+            let texte = texte.trim();
             let norm = normaliser_titre(texte);
             if !norm.is_empty() {
                 titres.entry(norm).or_default().push((i, ancre.page));
             }
+            let court = NUMERO_EN_TETE.replace(texte, "");
+            let norm = normaliser_titre(&court);
+            if court.len() < texte.len() && !norm.is_empty() {
+                sans_numero.entry(norm).or_default().push((i, ancre.page));
+            }
         }
     }
-    let cible = |p: &Paragraphe| -> Option<usize> {
-        // Un appel de note ne peut pas figurer dans un lien (lien imbriqué).
-        if p.segments.iter().any(|s| matches!(s, Segment::AppelNote { .. })) {
-            return None;
+    // Titres (hors de la page `page`) que vise une entrée faite des paragraphes `textes` :
+    // son texte brut (entrée d'un seul paragraphe), puis son texte joint ; le texte entier
+    // des titres d'abord, puis leur texte sans numéro en tête. Vide si aucun.
+    let vises = |textes: &[&str], page: u32| -> Vec<(usize, u32)> {
+        let joint = texte_entree(textes);
+        let brut = if textes.len() == 1 { Some(textes[0].trim()) } else { None };
+        for t in brut.into_iter().chain([joint.as_str()]) {
+            let norm = normaliser_titre(t);
+            for table in [&titres, &sans_numero] {
+                let autres: Vec<(usize, u32)> =
+                    table.get(&norm).into_iter().flatten().copied().filter(|(_, p)| *p != page).collect();
+                if !autres.is_empty() {
+                    return autres;
+                }
+            }
         }
-        let texte = p.texte_brut();
-        let texte = texte.trim();
-        let sans_numero = NUMERO_FINAL.replace(texte, "");
-        [texte, &sans_numero].into_iter().find_map(|t| {
-            let autres = || {
-                titres.get(&normaliser_titre(t)).into_iter().flatten().filter(|(_, page)| *page != p.ancre.page)
-            };
-            autres().find(|(_, page)| *page > p.ancre.page).or_else(|| autres().next()).map(|(i, _)| *i)
-        })
+        Vec::new()
     };
 
-    // Par page : paragraphes et titre visé par chacun.
-    let mut par_page: BTreeMap<u32, Vec<(usize, Option<usize>)>> = BTreeMap::new();
+    // (Demi-)pages dans l'ordre du livre : page, indices des paragraphes, et entrées
+    // (indice du premier paragraphe, nombre de paragraphes, titres visés). Une entrée ne
+    // déborde jamais de sa (demi-)page.
+    let mut rang: HashMap<(u32, Moitie), usize> = HashMap::new();
+    let mut moities: Vec<(u32, Vec<usize>, Vec<(usize, usize, Vec<(usize, u32)>)>)> = Vec::new();
     for (i, bloc) in blocs.iter().enumerate() {
         if let Bloc::Paragraphe(p) = bloc {
-            par_page.entry(p.ancre.page).or_default().push((i, cible(p)));
+            let r = *rang.entry((p.ancre.page, p.ancre.moitie)).or_insert_with(|| {
+                moities.push((p.ancre.page, Vec::new(), Vec::new()));
+                moities.len() - 1
+            });
+            moities[r].1.push(i);
         }
     }
-    let mut pages: BTreeSet<u32> = BTreeSet::new();
-    for (page, paragraphes) in &par_page {
-        let entrees = paragraphes.iter().filter(|(_, c)| c.is_some()).count();
-        let suite = page.checked_sub(1).is_some_and(|p| pages.contains(&p));
-        if (entrees >= MIN_TITRES_NIVEAU && entrees * 2 >= paragraphes.len())
-            || (suite && entrees == paragraphes.len())
-        {
-            pages.insert(*page);
+    // Un appel de note ne peut pas figurer dans un lien (lien imbriqué).
+    let sans_appel = |i: usize| match &blocs[i] {
+        Bloc::Paragraphe(p) => !p.segments.iter().any(|s| matches!(s, Segment::AppelNote { .. })),
+        _ => false,
+    };
+    for (page, paragraphes, entrees) in &mut moities {
+        let mut k = 0;
+        while k < paragraphes.len() {
+            // Paragraphes consécutifs dans les blocs, à partir du k-ième.
+            let suite: Vec<String> = paragraphes[k..]
+                .iter()
+                .enumerate()
+                .take_while(|&(d, &i)| i == paragraphes[k] + d && sans_appel(i))
+                .take(MAX_PARAGRAPHES_ENTREE)
+                .filter_map(|(_, &i)| match &blocs[i] {
+                    Bloc::Paragraphe(p) => Some(p.texte_brut().trim().to_string()),
+                    _ => None,
+                })
+                .collect();
+            let textes: Vec<&str> = suite.iter().map(String::as_str).collect();
+            // La plus longue qui vise un titre après la page, à défaut la plus longue qui
+            // en vise un.
+            let essais: Vec<(usize, Vec<(usize, u32)>)> =
+                (1..=etendue_entree(&textes)).rev().map(|n| (n, vises(&textes[..n], *page))).collect();
+            let trouve = essais
+                .iter()
+                .find(|(_, titres)| titres.iter().any(|(_, p)| p > page))
+                .or_else(|| essais.iter().find(|(_, titres)| !titres.is_empty()))
+                .cloned();
+            match trouve {
+                Some((n, titres)) => {
+                    entrees.push((paragraphes[k], n, titres));
+                    k += n;
+                }
+                None => k += 1,
+            }
         }
     }
-    let entrees: BTreeMap<usize, usize> = pages
+    // (Demi-)pages de sommaire, et début de chaque suite de (demi-)pages de sommaire.
+    let mut sommaire = vec![false; moities.len()];
+    let mut debut_de_suite = vec![false; moities.len()];
+    for (r, (page, paragraphes, entrees)) in moities.iter().enumerate() {
+        let couverts: usize = entrees.iter().map(|(_, n, _)| n).sum();
+        let suite = r.checked_sub(1).is_some_and(|a| sommaire[a] && *page <= moities[a].0 + 1);
+        sommaire[r] = (couverts >= MIN_TITRES_NIVEAU && couverts * 2 >= paragraphes.len())
+            || (suite && couverts == paragraphes.len());
+        debut_de_suite[r] = sommaire[r] && !suite;
+    }
+    let pages: BTreeSet<u32> = moities.iter().zip(&sommaire).filter(|(_, s)| **s).map(|(m, _)| m.0).collect();
+    // Entrées des (demi-)pages de sommaire, dans l'ordre du livre : premier paragraphe →
+    // (nombre de paragraphes, titre visé).
+    let mut a_viser: Vec<(usize, usize, u32, &Vec<(usize, u32)>)> = moities
         .iter()
-        .flat_map(|page| par_page[page].iter().filter_map(|&(i, c)| Some((i, c?))))
+        .zip(&sommaire)
+        .filter(|(_, s)| **s)
+        .flat_map(|((page, _, entrees), _)| entrees.iter().map(|(i, n, titres)| (*i, *n, *page, titres)))
         .collect();
+    a_viser.sort_by_key(|(i, ..)| *i);
+    let mut deja_vises: HashSet<usize> = HashSet::new();
+    let mut entrees: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
+    for (i, n, page, titres) in a_viser {
+        let libres: Vec<&(usize, u32)> = titres.iter().filter(|(t, _)| !deja_vises.contains(t)).collect();
+        let parmi = if libres.is_empty() { titres.iter().collect() } else { libres };
+        let (titre, _) = parmi.iter().find(|(_, p)| *p > page).or_else(|| parmi.first()).expect("titre visé");
+        deja_vises.insert(*titre);
+        entrees.insert(i, (n, *titre));
+    }
+    let couverts: HashSet<usize> = entrees.iter().flat_map(|(&i, &(n, _))| i..i + n).collect();
 
-    // Titre du sommaire, avant la première entrée de chaque suite de pages.
-    for page in pages.iter().filter(|p| p.checked_sub(1).is_none_or(|p| !pages.contains(&p))) {
-        let premiere = par_page[page].iter().find_map(|&(i, c)| c.map(|_| i)).expect("page avec entrées");
+    // Titre du sommaire, avant la première entrée de chaque suite de (demi-)pages.
+    for (_, _, entrees) in moities.iter().zip(&debut_de_suite).filter(|(_, d)| **d).map(|(m, _)| m) {
+        let premiere = entrees.first().map(|(i, ..)| *i).expect("page avec entrées");
         // Les notes et les sauts (titre seul sur une page courte) sont passés ; un
-        // paragraphe qui est lui-même une entrée (suite de sommaire après une page
-        // vide) reste une entrée.
+        // paragraphe qui est lui-même dans une entrée (suite de sommaire après une page
+        // vide) y reste.
         let avant = blocs[..premiere].iter().rposition(|b| !matches!(b, Bloc::Note { .. } | Bloc::Saut { .. }));
         if let Some(j) = avant
-            && !entrees.contains_key(&j)
+            && !couverts.contains(&j)
             && let Bloc::Paragraphe(p) = &blocs[j]
             && TITRES_DE_SOMMAIRE.contains(&normaliser(&p.texte_brut()).as_str())
         {
@@ -1321,11 +1406,33 @@ pub fn sommaire_cliquable(mut blocs: Vec<Bloc>, titre_livre: &str) -> (Vec<Bloc>
             _ => None,
         })
         .collect();
-    for (i, titre) in entrees {
-        let Bloc::Paragraphe(p) = &mut blocs[i] else { continue };
-        let segments = std::mem::take(&mut p.segments);
-        blocs[i] = Bloc::EntreeSommaire { segments, cible: ids[&titre].clone(), ancre: p.ancre };
+    let mut sortie = Vec::with_capacity(blocs.len());
+    let mut restants = blocs.into_iter().enumerate();
+    while let Some((i, bloc)) = restants.next() {
+        let Some(&(n, titre)) = entrees.get(&i) else {
+            sortie.push(bloc);
+            continue;
+        };
+        let Bloc::Paragraphe(mut entree) = bloc else { unreachable!("entrée faite de paragraphes") };
+        for (_, autre) in restants.by_ref().take(n - 1) {
+            let Bloc::Paragraphe(p) = autre else { unreachable!("entrée faite de paragraphes") };
+            let cesure = fin_de_cesure(&entree.texte_brut(), &p.texte_brut());
+            match entree.segments.last_mut() {
+                Some(Segment::Texte { texte, .. }) if cesure => {
+                    texte.truncate(texte.trim_end().len());
+                    texte.pop();
+                }
+                _ => entree.segments.push(Segment::Texte { texte: " ".into(), gras: false, italique: false }),
+            }
+            // Même (demi-)page : le rectangle s'étend au paragraphe.
+            let [x0, y0, x1, y1] = entree.ancre.rect;
+            let [a0, b0, a1, b1] = p.ancre.rect;
+            entree.ancre.rect = [x0.min(a0), y0.min(b0), x1.max(a1), y1.max(b1)];
+            entree.segments.extend(p.segments);
+        }
+        sortie.push(Bloc::EntreeSommaire { segments: entree.segments, cible: ids[&titre].clone(), ancre: entree.ancre });
     }
+    let blocs = sortie;
 
     let points = pages
         .iter()
@@ -2462,6 +2569,179 @@ mod tests {
         blocs.insert(2, Bloc::Saut { ancre: ancre(2) });
         let (blocs, _) = sommaire_cliquable(blocs, "Mon livre");
         assert_eq!(rendu_sommaire(&blocs)[1..4], ["# Table des matières", "* * *", "[1. Premier chapitre ........ 5](#t-1-premier-chapitre)"]);
+    }
+
+    /// Titres du corps visés par `SOMMAIRE_DE_CONFERENCES` : (page, texte).
+    const CONFERENCES: [(u32, &str); 5] = [
+        (5, "II. LES BASES DE LA SUITE (II)"),
+        (8, "VII. JUGEMENTS ANALYTIQUES ET JUGEMENTS SYNTHÉTIQUES (Logique II)"),
+        (11, "VIII. L'ÉLABORATION DES CONCEPTS ET LE SYSTÈME DES CATÉGORIES CHEZ HEGEL"),
+        (14, "IX. LA CULTURE PRATIQUE DE LA PENSEE"),
+        (17, "X. LA CULTURE PRATIQUE DE LA PENSÉE"),
+    ];
+
+    /// Sommaire de la page 2, à la manière de Connaissance : une ligne de conférence
+    /// numérotée, puis une ou deux lignes de titre sans numéro de page.
+    const SOMMAIRE_DE_CONFERENCES: [&str; 13] = [
+        "Table des matières",
+        "Deuxième conférence, Berlin 5",
+        "Les bases de la suite (II)",
+        "Septième conférence, Berlin 8",
+        "Jugements analytiques et jugements synthétiques",
+        "(Logique II)",
+        "Huitième conférence, Berlin 11",
+        "L'élaboration des concepts et le système des caté-",
+        "gories chez Hegel.",
+        "Neuvième conférence, Dornach 14",
+        "La culture pratique de la pensée.",
+        "Dixième conférence, Dornach 17",
+        "La culture pratique de la pensée.",
+    ];
+
+    /// Livre : titre, sommaire de la page 2 (une ligne tous les 40 millièmes), titres
+    /// `CONFERENCES` suivis de texte courant.
+    fn livre_a_conferences(sommaire: &[&str]) -> Vec<Bloc> {
+        let mut blocs = vec![titre_en(1, 1, "Mon livre")];
+        for (k, texte) in sommaire.iter().enumerate() {
+            blocs.push(para_en(2, 100 + 40 * k as u16, texte, false));
+        }
+        for (page, texte) in CONFERENCES {
+            blocs.push(titre_en(1, page, texte));
+            blocs.push(corps(page, &texte_long()));
+        }
+        blocs
+    }
+
+    fn lien(texte: &str, titre: &str) -> String {
+        format!("[{texte}](#{})", crate::markdown::ancre_titre(titre))
+    }
+
+    #[test]
+    fn entree_vise_le_titre_sans_son_numero_en_tete() {
+        let (blocs, points) = sommaire_cliquable(livre_a_conferences(&SOMMAIRE_DE_CONFERENCES), "Mon livre");
+        let rendu = rendu_sommaire(&blocs);
+        assert_eq!(rendu[3], lien("Les bases de la suite (II)", CONFERENCES[0].1));
+        assert_eq!(lien("Les bases de la suite (II)", CONFERENCES[0].1), "[Les bases de la suite (II)](#t-ii-les-bases-de-la-suite-ii)");
+        // Les paragraphes couverts comptent pour reconnaître la page de sommaire.
+        assert_eq!(points.iter().map(|p| p.ancre.page).collect::<Vec<_>>(), [2]);
+    }
+
+    #[test]
+    fn entree_sur_deux_paragraphes_donne_une_seule_entree_liee() {
+        let livre = livre_a_conferences(&SOMMAIRE_DE_CONFERENCES);
+        let nb_blocs = livre.len();
+        let (blocs, _) = sommaire_cliquable(livre, "Mon livre");
+        let rendu = rendu_sommaire(&blocs);
+        assert_eq!(rendu[4..6], [
+            "Septième conférence, Berlin 8".to_string(),
+            lien("Jugements analytiques et jugements synthétiques (Logique II)", CONFERENCES[1].1),
+        ]);
+        // Une seule entrée pour les deux paragraphes, ancrée au premier, rectangle étendu au second.
+        assert_eq!(rendu[6], "Huitième conférence, Berlin 11");
+        assert_eq!(blocs[5].ancre(), Ancre { page: 2, moitie: Moitie::Entiere, rect: [100, 260, 900, 330] });
+        // Deux entrées de deux paragraphes : deux blocs de moins, aucun texte perdu.
+        assert_eq!(blocs.len(), nb_blocs - 2);
+    }
+
+    #[test]
+    fn entree_coupee_par_une_cesure_recollee() {
+        let (blocs, _) = sommaire_cliquable(livre_a_conferences(&SOMMAIRE_DE_CONFERENCES), "Mon livre");
+        assert_eq!(
+            rendu_sommaire(&blocs)[7],
+            lien("L'élaboration des concepts et le système des catégories chez Hegel.", CONFERENCES[2].1)
+        );
+    }
+
+    #[test]
+    fn entrees_homonymes_visent_des_titres_distincts_dans_l_ordre() {
+        let (blocs, _) = sommaire_cliquable(livre_a_conferences(&SOMMAIRE_DE_CONFERENCES), "Mon livre");
+        let rendu = rendu_sommaire(&blocs);
+        assert_eq!(rendu[9], lien("La culture pratique de la pensée.", CONFERENCES[3].1));
+        assert_eq!(rendu[11], lien("La culture pratique de la pensée.", CONFERENCES[4].1));
+        assert_ne!(rendu[9], rendu[11]);
+        // Plus d'entrées que de titres : une fois tous visés, la règle habituelle (le
+        // premier après la page de l'entrée).
+        let mut sommaire = SOMMAIRE_DE_CONFERENCES.to_vec();
+        sommaire.push("La culture pratique de la pensée.");
+        let (blocs, _) = sommaire_cliquable(livre_a_conferences(&sommaire), "Mon livre");
+        assert_eq!(rendu_sommaire(&blocs)[12], lien("La culture pratique de la pensée.", CONFERENCES[3].1));
+    }
+
+    #[test]
+    fn sommaire_compte_par_demi_page() {
+        // Page 2 en double page : colophon à gauche (14 paragraphes), sommaire à droite.
+        let mut livre = livre_a_conferences(&SOMMAIRE_DE_CONFERENCES);
+        for bloc in &mut livre[1..=SOMMAIRE_DE_CONFERENCES.len()] {
+            let Bloc::Paragraphe(p) = bloc else { panic!("paragraphe attendu") };
+            p.ancre.moitie = Moitie::Droite;
+        }
+        for k in 0..14 {
+            let texte = if k == 0 { "Les bases de la suite (II)".to_string() } else { format!("Ligne {k} du colophon") };
+            livre.insert(1 + k, para_moitie(2, Moitie::Gauche, &texte, 1));
+        }
+        let (blocs, points) = sommaire_cliquable(livre, "Mon livre");
+        let rendu = rendu_sommaire(&blocs);
+        assert_eq!(points.iter().map(|p| p.ancre.page).collect::<Vec<_>>(), [2]);
+        // La moitié gauche n'est pas un sommaire : son paragraphe reste un paragraphe.
+        assert_eq!(rendu[1], "Les bases de la suite (II)");
+        assert_eq!(rendu[15], "Table des matières");
+        assert_eq!(rendu[17], lien("Les bases de la suite (II)", CONFERENCES[0].1));
+    }
+
+    #[test]
+    fn entree_plus_courte_preferee_si_seule_a_viser_un_titre_apres_le_sommaire() {
+        // Le titre sur deux lignes du sommaire est aussi celui de la page de faux-titre
+        // (avant le sommaire), et ses deux lignes sont deux parties du corps : chacune
+        // vise sa partie, comme le veut la règle « après la page, à défaut avant ».
+        let blocs = vec![
+            titre_en(1, 1, "Mon livre"),
+            titre_en(1, 6, "LE SENS DE L’AMOUR DANS LE MONDE MORALE ANTHROPOSOPHIQUE"),
+            para_en(7, 100, "SOMMAIRE", false),
+            para_en(7, 140, "LE SENS DE L’AMOUR DANS LE MONDE", false),
+            para_en(7, 180, "MORALE ANTHROPOSOPHIQUE", false),
+            para_en(7, 220, "Première conférence.", false),
+            titre_en(1, 10, "LE SENS DE L’AMOUR DANS LE MONDE"),
+            titre_en(1, 15, "MORALE ANTHROPOSOPHIQUE"),
+            titre_en(2, 15, "PREMIÈRE CONFÉRENCE"),
+        ];
+        let (blocs, _) = sommaire_cliquable(blocs, "Mon livre");
+        assert_eq!(
+            rendu_sommaire(&blocs)[2..6],
+            [
+                "# SOMMAIRE",
+                "[LE SENS DE L’AMOUR DANS LE MONDE](#t-le-sens-de-l-amour-dans-le-monde)",
+                "[MORALE ANTHROPOSOPHIQUE](#t-morale-anthroposophique)",
+                "[Première conférence.](#t-première-conférence)",
+            ]
+        );
+        // Sans titre après le sommaire, l'entrée la plus longue l'emporte.
+        let blocs = vec![
+            titre_en(1, 6, "LE SENS DE L’AMOUR DANS LE MONDE MORALE ANTHROPOSOPHIQUE"),
+            titre_en(1, 7, "MORALE ANTHROPOSOPHIQUE"),
+            titre_en(1, 8, "Première conférence."),
+            titre_en(1, 9, "Deuxième conférence."),
+            para_en(20, 100, "LE SENS DE L’AMOUR DANS LE MONDE", false),
+            para_en(20, 140, "MORALE ANTHROPOSOPHIQUE", false),
+            para_en(20, 180, "Première conférence.", false),
+            para_en(20, 220, "Deuxième conférence.", false),
+        ];
+        let (blocs, _) = sommaire_cliquable(blocs, "");
+        assert_eq!(
+            rendu_sommaire(&blocs)[4],
+            "[LE SENS DE L’AMOUR DANS LE MONDE MORALE ANTHROPOSOPHIQUE](#t-le-sens-de-l-amour-dans-le-monde-morale-anthroposophique)"
+        );
+    }
+
+    #[test]
+    fn entree_jamais_a_cheval_sur_deux_pages() {
+        let mut livre = livre_a_conferences(&SOMMAIRE_DE_CONFERENCES);
+        // « (Logique II) » passe en tête de la page 3 : l'entrée ne la rejoint pas.
+        let Bloc::Paragraphe(p) = &mut livre[6] else { panic!("paragraphe attendu") };
+        assert_eq!(p.texte_brut(), "(Logique II)");
+        p.ancre.page = 3;
+        let (blocs, _) = sommaire_cliquable(livre, "Mon livre");
+        let rendu = rendu_sommaire(&blocs);
+        assert_eq!(rendu[5..7], ["Jugements analytiques et jugements synthétiques", "(Logique II)"]);
     }
 
     /// Paragraphe d'une ligne dans la moitié `moitie` de la page.

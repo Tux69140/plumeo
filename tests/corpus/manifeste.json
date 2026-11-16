@@ -34,7 +34,7 @@
   { "fichier": "steiner/pdf/Steiner Rudolf - Connaissance Logique Pensée pratique.pdf",
     "serie": "omnipage-double", "titres": "auto",
     "attentes": { "source_titres": null, "titres_n1": null, "titres_contiennent": [],
-                  "prefixe_n1": null, "n1_min": null, "n2": null, "notes_pages": [], "notes_min": 1,
+                  "prefixe_n1": null, "n1_min": null, "n2": null, "entrees_sommaire": 14, "notes_pages": [], "notes_min": 1,
                   "sans_notes_pages": [], "absent_regex": ["^\\d+\\s+\\d+$"], "moities": true } },
   { "fichier": "bailey/pdf/[02] Lettres Sur La Méditation Occulte - Alice Bailey.pdf",
     "serie": "distiller-a4", "titres": "auto",
