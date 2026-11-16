@@ -208,7 +208,8 @@ fn est_sommaire(bloc: &Bloc, pages: &BTreeSet<u32>) -> bool {
 }
 
 /// Signet à chercher dans le corps. `texte_impose` : le titre garde le texte du signet
-/// (numéro et titre fusionnés) au lieu de celui des paragraphes retrouvés.
+/// (numéro et titre fusionnés) au lieu de celui des paragraphes retrouvés, si ceux-ci
+/// le disent exactement ; s'ils disent plus, leur texte est gardé (« I. » en tête).
 struct SignetCherche {
     signet: Signet,
     texte_impose: bool,
@@ -230,6 +231,8 @@ enum Numerotation {
 static NUMERO_SEUL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:[IVXLCDM]+|\d+)\.?$").unwrap());
 static NUMEROTE_ARABE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+\.?(?:\s|$)").unwrap());
 static NUMEROTE_ROMAIN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[IVXLCDM]+\.?(?:\s|$)").unwrap());
+/// Numéro en tête d'un texte de titre, suivi ou non d'un point (« I La pierre »).
+static NUMERO_EN_TETE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([IVXLCDM]+|\d+)\.?\s+").unwrap());
 
 fn numerotation(titre: &str) -> Option<Numerotation> {
     let titre = titre.trim();
@@ -326,7 +329,16 @@ fn titres_depuis_signets(
             Some((debut, fin, texte)) => {
                 utilises.extend(debut..fin);
                 let ancre = blocs[debut].ancre();
-                let texte = if *texte_impose { signet.titre.trim().to_string() } else { texte };
+                // Le texte du signet ne remplace que des paragraphes qui le disent
+                // exactement : sur une correspondance de début, les mots en trop
+                // seraient perdus. Le texte des paragraphes garde alors le numéro en tête.
+                let texte = if !*texte_impose {
+                    texte
+                } else if normaliser_titre(&texte) == cible {
+                    signet.titre.trim().to_string()
+                } else {
+                    NUMERO_EN_TETE.replace(&texte, "$1. ").into_owned()
+                };
                 remplacements.insert(debut, (fin - debut, Bloc::Titre { niveau, texte, ancre }));
             }
             None => {
@@ -1320,6 +1332,22 @@ mod tests {
         assert!(titres(&blocs).iter().any(|(_, x)| x == "I. La pierre cubique"));
         assert_eq!(blocs.iter().filter(|b| b.ancre().page == 9).count(), 2);
         assert!(points.iter().all(|p| p.ancre.page != 9), "{points:?}");
+    }
+
+    #[test]
+    fn signets_fusionnes_sur_un_titre_plus_long_gardent_le_texte_des_paragraphes() {
+        // Le corps dit plus que le signet : le texte du signet ne doit pas en effacer la fin.
+        let blocs = vec![
+            para(9, "I", 19.4, true, 1),
+            para(9, "La pierre cubique et la mesure", 19.4, true, 1),
+            corps(9, &texte_long()),
+        ];
+        let signets = [signet("1. A", 1, 3), signet("2. B", 1, 5), signet("I", 1, 9), signet("La pierre cubique", 1, 9)];
+        let (blocs, _, _, _, _) = detecter_titres(blocs, &signets, 100, SourceTitres::Signets);
+        let t = titres(&blocs);
+        assert!(t.iter().any(|(_, x)| x == "I. La pierre cubique et la mesure"), "{t:?}");
+        assert!(t.iter().all(|(_, x)| x != "I. La pierre cubique"), "{t:?}");
+        assert_eq!(blocs.iter().filter(|b| b.ancre().page == 9).count(), 2);
     }
 
     #[test]
