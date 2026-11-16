@@ -95,6 +95,8 @@ struct NotePage {
 enum Genre {
     Titre(usize),
     Note(String),
+    /// Saut de section `* * *` : ni paragraphe ni titre, hors des statistiques.
+    Saut,
     Paragraphe,
 }
 
@@ -152,6 +154,8 @@ fn lire_blocs(md: &str) -> Vec<BlocMd> {
         } else if let Some((etiquette, reste)) = ligne.strip_prefix("[^").and_then(|l| l.split_once("]: ")) {
             let marqueur = etiquette.split_once('-').map_or("", |(_, m)| m).to_string();
             (Genre::Note(marqueur), texte_brut(reste))
+        } else if ligne == "* * *" {
+            (Genre::Saut, String::new())
         } else {
             (Genre::Paragraphe, texte_brut(ligne))
         };

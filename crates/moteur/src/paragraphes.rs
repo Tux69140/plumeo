@@ -12,6 +12,8 @@ use crate::modele::{Moitie, Ancre, Rect};
 pub struct BlocTexte {
     pub x0: f32,
     pub x1: f32,
+    /// Bas du bloc : bas de la dernière ligne d'une page pleine.
+    pub y1: f32,
     pub interligne: f32,
 }
 
@@ -24,8 +26,13 @@ fn mediane(mut valeurs: Vec<f32>) -> f32 {
     if n % 2 == 1 { valeurs[n / 2] } else { (valeurs[n / 2 - 1] + valeurs[n / 2]) / 2.0 }
 }
 
-/// Mesure le bloc de texte : médianes des bords sur les pages d'au moins
-/// 10 lignes (à défaut, sur toutes les pages), médiane de l'interligne.
+fn bas(lignes: &[Ligne]) -> f32 {
+    lignes.iter().map(|l| l.rect.y1).fold(f32::MIN, f32::max)
+}
+
+/// Mesure le bloc de texte : médianes des bords (et du bas de la dernière ligne)
+/// sur les pages d'au moins 10 lignes (à défaut, sur toutes les pages), médiane
+/// de l'interligne.
 pub fn mesurer_bloc(pages: &[Vec<Ligne>]) -> BlocTexte {
     let pleines: Vec<&Vec<Ligne>> = pages.iter().filter(|p| p.len() >= 10).collect();
     let retenues: Vec<&Vec<Ligne>> =
@@ -34,18 +41,57 @@ pub fn mesurer_bloc(pages: &[Vec<Ligne>]) -> BlocTexte {
     let max = |p: &&Vec<Ligne>| p.iter().map(|l| l.rect.x1).fold(f32::MIN, f32::max);
     let x0 = mediane(retenues.iter().map(min).collect());
     let x1 = mediane(retenues.iter().map(max).collect());
+    let y1 = mediane(retenues.iter().map(|p| bas(p)).collect());
     let ecarts: Vec<f32> = pages
         .iter()
         .flat_map(|p| p.windows(2).map(|w| w[1].rect.y0 - w[0].rect.y0))
         .collect();
-    BlocTexte { x0, x1, interligne: mediane(ecarts) }
+    BlocTexte { x0, x1, y1, interligne: mediane(ecarts) }
+}
+
+/// La ligne va-t-elle jusqu'au bord droit du bloc (pas de blanc de fin de paragraphe) ?
+fn ligne_pleine(l: &Ligne, bloc: BlocTexte) -> bool {
+    bloc.x1 - l.rect.x1 <= 0.15 * (bloc.x1 - bloc.x0)
+}
+
+/// Écart (en interlignes) entre la dernière ligne et le bas effectif au-delà duquel
+/// une page est courte.
+const ECART_PAGE_COURTE: f32 = 2.5;
+
+/// Ligne de texte courant coupée par le bas de la page : elle occupe toute la largeur
+/// du bloc (ni courte, ni alignée à droite) et ne finit pas par une ponctuation finale.
+fn paragraphe_continue(l: &Ligne, bloc: BlocTexte) -> bool {
+    let fin = l
+        .mots
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(i, _)| !l.exposants.contains(i))
+        .and_then(|(_, m)| m.texte.trim_end().chars().last());
+    ligne_pleine(l, bloc)
+        && l.rect.x0 - bloc.x0 <= 0.15 * (bloc.x1 - bloc.x0)
+        && fin.is_some_and(|c| !PONCTUATION_FINALE.contains(&c))
+}
+
+/// La page s'arrête-t-elle bien avant le bas du bloc ? Le bas effectif est le haut de
+/// la première ligne de notes s'il y en a, sinon le bas du bloc. Une page sans corps
+/// n'est pas courte, ni une page dont le dernier paragraphe continue sur la page
+/// suivante (figure en bas de page).
+pub fn page_courte(corps: &[Ligne], notes: &[Ligne], bloc: BlocTexte) -> bool {
+    let Some(derniere) = corps.last() else { return false };
+    if paragraphe_continue(derniere, bloc) {
+        return false;
+    }
+    let bas_effectif =
+        if notes.is_empty() { bloc.y1 } else { notes.iter().map(|l| l.rect.y0).fold(f32::MAX, f32::min) };
+    bas_effectif - bas(corps) > ECART_PAGE_COURTE * bloc.interligne
 }
 
 /// Faut-il couper le paragraphe entre `prec` et `l` ?
 fn coupure(prec: &Ligne, l: &Ligne, bloc: BlocTexte) -> bool {
     let largeur = bloc.x1 - bloc.x0;
     let retrait = |x0: f32| x0 - bloc.x0 > 0.03 * largeur;
-    bloc.x1 - prec.rect.x1 > 0.15 * largeur
+    !ligne_pleine(prec, bloc)
         || l.rect.y0 - prec.rect.y0 > 1.5 * bloc.interligne
         || (retrait(l.rect.x0) && !retrait(prec.rect.x0))
         || (l.taille() - prec.taille()).abs() > 0.5
@@ -324,12 +370,29 @@ pub fn raccorder_pages(blocs: Vec<Bloc>, vocab: &Vocabulaire, pages_sommaire: &B
     sortie
 }
 
+/// Un saut de section ne reste qu'entre deux paragraphes (les notes, rendues
+/// ailleurs, ne comptent pas) : on retire les sauts en tête et en fin, ceux qui
+/// touchent un titre, et tous sauf le premier d'une suite de sauts.
+pub fn nettoyer_sauts(blocs: Vec<Bloc>) -> Vec<Bloc> {
+    let visible = |b: &&Bloc| !matches!(b, Bloc::Note { .. });
+    let est_saut = |b: &Bloc| matches!(b, Bloc::Saut { .. });
+    let paragraphe = |b: Option<&Bloc>| matches!(b, Some(Bloc::Paragraphe(_)));
+    let garder: Vec<bool> = (0..blocs.len())
+        .map(|i| {
+            !est_saut(&blocs[i])
+                || (paragraphe(blocs[..i].iter().rev().find(visible))
+                    && paragraphe(blocs[i + 1..].iter().find(|b| visible(b) && !est_saut(b))))
+        })
+        .collect();
+    blocs.into_iter().zip(garder).filter_map(|(b, g)| g.then_some(b)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::modele::Mot;
 
-    const BLOC: BlocTexte = BlocTexte { x0: 0.1, x1: 0.9, interligne: 0.03 };
+    const BLOC: BlocTexte = BlocTexte { x0: 0.1, x1: 0.9, y1: 0.9, interligne: 0.03 };
 
     fn mot(texte: &str, x0: f32, x1: f32, y0: f32, taille: f32, gras: bool, italique: bool) -> Mot {
         Mot {
@@ -623,5 +686,84 @@ mod tests {
         assert!((b.x0 - 0.12).abs() < 1e-6);
         assert!((b.x1 - 0.88).abs() < 1e-6);
         assert!((b.interligne - 0.03).abs() < 1e-4);
+        // Bas de la dernière ligne (0,1 + 9 × 0,03 + 0,02), pages pleines seulement.
+        assert!((b.y1 - 0.39).abs() < 1e-4, "{}", b.y1);
+    }
+
+    /// Page de lignes pleines, de `y0` (haut de la première) à `fin` (haut de la
+    /// dernière) ; la dernière ligne est `derniere`, de `x0` à `x1`.
+    fn lignes_de(y0: f32, fin: f32, derniere: &str, (x0, x1): (f32, f32)) -> Vec<Ligne> {
+        let n = ((fin - y0) / 0.03).round() as usize;
+        let mut lignes: Vec<Ligne> = (0..n).map(|i| ligne("x", 0.1, 0.9, y0 + 0.03 * i as f32)).collect();
+        lignes.push(ligne(derniere, x0, x1, y0 + 0.03 * n as f32));
+        lignes
+    }
+
+    #[test]
+    fn page_courte_mesuree_au_bas_effectif() {
+        // Bas du bloc 0,9, interligne 0,03 : courte si la dernière ligne finit avant 0,825.
+        assert!(!page_courte(&lignes_de(0.1, 0.86, "fin.", (0.1, 0.5)), &[], BLOC));
+        assert!(page_courte(&lignes_de(0.1, 0.4, "fin.", (0.1, 0.5)), &[], BLOC));
+        assert!(!page_courte(&[], &[], BLOC));
+        // Avec des notes, le bas effectif est le haut de la première ligne de notes.
+        let notes = vec![ligne("1. Note", 0.1, 0.9, 0.62), ligne("suite", 0.1, 0.9, 0.65)];
+        assert!(!page_courte(&lignes_de(0.1, 0.55, "fin.", (0.1, 0.5)), &notes, BLOC));
+        assert!(page_courte(&lignes_de(0.1, 0.49, "fin.", (0.1, 0.5)), &notes, BLOC));
+    }
+
+    #[test]
+    fn page_coupee_en_plein_paragraphe_n_est_pas_courte() {
+        // Une figure occupe le bas de la page : la dernière ligne, pleine et sans
+        // ponctuation finale, continue sur la page suivante.
+        assert!(!page_courte(&lignes_de(0.1, 0.4, "dont", (0.1, 0.9)), &[], BLOC));
+        // Ligne pleine mais phrase finie, ligne courte ou ligne alignée à droite (date,
+        // signature) : la page reste courte.
+        assert!(page_courte(&lignes_de(0.1, 0.4, "fin.", (0.1, 0.9)), &[], BLOC));
+        assert!(page_courte(&lignes_de(0.1, 0.4, "ISBN 2-85566-476-4", (0.1, 0.5)), &[], BLOC));
+        assert!(page_courte(&lignes_de(0.1, 0.4, "Le Bonfin, le 20 juillet 1969", (0.5, 0.9)), &[], BLOC));
+    }
+
+    fn saut(page: u32) -> Bloc {
+        Bloc::Saut { ancre: para("", page, 0.1).ancre() }
+    }
+
+    fn genres(blocs: &[Bloc]) -> String {
+        blocs
+            .iter()
+            .map(|b| match b {
+                Bloc::Paragraphe(_) => 'P',
+                Bloc::Titre { .. } => 'T',
+                Bloc::Note { .. } => 'N',
+                Bloc::Saut { .. } => 'S',
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pas_de_raccord_a_travers_un_saut() {
+        let blocs = vec![para("ISBN 2-85566-476-4", 3, 0.8), saut(4), para("Le lecteur comprendra", 4, 0.1)];
+        let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new());
+        assert_eq!(genres(&r), "PSP");
+    }
+
+    #[test]
+    fn nettoyage_des_sauts() {
+        let note = || Bloc::Note {
+            etiquette: "1-1".into(),
+            marqueur: "1".into(),
+            segments: vec![],
+            ancre: para("", 4, 0.9).ancre(),
+        };
+        let titre = || Bloc::Titre { niveau: 1, texte: "T".into(), ancre: para("", 5, 0.1).ancre() };
+        let p = |page| para("x", page, 0.1);
+        // En tête, en fin, en double.
+        assert_eq!(genres(&nettoyer_sauts(vec![saut(1), p(1), saut(2), saut(2), p(2), saut(3)])), "PSP");
+        // Contre un titre, d'un côté ou de l'autre.
+        assert_eq!(genres(&nettoyer_sauts(vec![p(1), saut(2), titre(), saut(3), p(3)])), "PTP");
+        // Les notes ne comptent pas comme voisines : le saut entre deux paragraphes reste,
+        // celui qui ne précède que des notes s'en va.
+        assert_eq!(genres(&nettoyer_sauts(vec![p(1), note(), saut(2), p(2)])), "PNSP");
+        assert_eq!(genres(&nettoyer_sauts(vec![p(1), note(), saut(2), titre()])), "PNT");
+        assert_eq!(genres(&nettoyer_sauts(vec![p(1), saut(2), note(), note()])), "PNN");
     }
 }

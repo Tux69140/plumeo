@@ -263,7 +263,7 @@ fn est_debut_de_section(b: &Bloc) -> bool {
     match b {
         Bloc::Titre { texte, .. } => normaliser(texte) == "notes",
         Bloc::Paragraphe(p) => normaliser(&p.texte_brut()) == "notes",
-        Bloc::Note { .. } => false,
+        Bloc::Note { .. } | Bloc::Saut { .. } => false,
     }
 }
 
@@ -368,7 +368,7 @@ pub fn notes_regroupees(
         let (ancre, texte) = match &blocs[i] {
             Bloc::Titre { texte, ancre, .. } => (*ancre, texte.clone()),
             Bloc::Paragraphe(p) => (p.ancre, p.texte_brut()),
-            Bloc::Note { .. } => unreachable!(),
+            Bloc::Note { .. } | Bloc::Saut { .. } => unreachable!(),
         };
         retraits.push(Retrait { ancre, role: Role::TitreNotes, texte });
 

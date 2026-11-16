@@ -11,7 +11,7 @@ use crate::lignes::{Ligne, regrouper_en_lignes};
 use crate::markdown::ecrire_markdown;
 use crate::modele::{Ancre, ErreurMoteur, Moitie, Page};
 use crate::notes::{Etiqueteuse, notes_bas_de_page, notes_regroupees};
-use crate::paragraphes::{Vocabulaire, mesurer_bloc, paragraphes_page, raccorder_pages};
+use crate::paragraphes::{Vocabulaire, mesurer_bloc, nettoyer_sauts, page_courte, paragraphes_page, raccorder_pages};
 use crate::pdf::DocumentPdf;
 use crate::points::{GenrePoint, PointAVerifier};
 use crate::reglages::{ReglagesSerie, SourceTitres};
@@ -107,11 +107,19 @@ pub fn convertir_livre(
     let vocab = vocabulaire_de(&lues);
     let mut etiqueteuse = Etiqueteuse::new();
     let mut blocs: Vec<Bloc> = Vec::new();
+    // La dernière page avec du corps s'est-elle arrêtée bien avant le bas du bloc ?
+    let mut apres_page_courte = false;
     for lue in &lues {
         let (page, classee) = (&lue.page, &lue.classee);
         let paragraphes = paragraphes_page(&classee.corps, page.numero, page.moitie, bloc, &vocab);
         if classee.corps.is_empty() && classee.notes.is_empty() {
             points.push(point_page_sans_texte(page));
+        }
+        if let Some(premiere) = classee.corps.first() {
+            if apres_page_courte {
+                blocs.push(Bloc::Saut { ancre: Ancre::depuis(page.numero, page.moitie, premiere.rect) });
+            }
+            apres_page_courte = page_courte(&classee.corps, &classee.notes, bloc);
         }
         let (de_page, pts) =
             notes_bas_de_page(paragraphes, &classee.notes, page.numero, page.moitie, &mut etiqueteuse, &vocab);
@@ -128,7 +136,7 @@ pub fn convertir_livre(
     points.extend(pts);
     let sommaires: BTreeSet<u32> =
         points.iter().filter(|p| p.genre == GenrePoint::Sommaire).map(|p| p.ancre.page).collect();
-    let blocs = raccorder_pages(blocs, &vocab, &sommaires);
+    let blocs = nettoyer_sauts(raccorder_pages(blocs, &vocab, &sommaires));
 
     let nb_notes = blocs.iter().filter(|b| matches!(b, Bloc::Note { .. })).count();
     Ok(Conversion { markdown: ecrire_markdown(&blocs), retraits, points, source_titres, nb_pages, nb_notes })
@@ -170,6 +178,7 @@ pub fn apercu_page(doc: &DocumentPdf, numero: u32, reglages: &ReglagesSerie) -> 
                     format!("{marqueur} {}", texte_des_segments(segments))
                 }
                 Bloc::Titre { texte, .. } => texte.clone(),
+                Bloc::Saut { .. } => String::new(),
             })
             .collect::<Vec<_>>()
             .join("\n\n");

@@ -158,6 +158,12 @@ fn chap1(md: &str) -> String {
 }
 
 #[test]
+fn saut_de_section_en_filet() {
+    let x = chap1("# T\n\n<!-- @p3 1,2,3,4 -->\nAvant\n\n<!-- @p4 1,2,3,4 -->\n* * *\n\n<!-- @p4 1,2,3,4 -->\nApres\n");
+    assert!(x.contains("<p>Avant</p>\n<hr />\n<p>Apres</p>"), "{x}");
+}
+
+#[test]
 fn html_brut_assaini() {
     let x = chap1("# T\n\nA <img src=\"a.png\"> et <BR> puis <span>x\n");
     assert!(x.contains("<img src=\"a.png\" />"), "{x}");

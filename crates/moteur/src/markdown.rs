@@ -145,6 +145,7 @@ pub fn ecrire_markdown(blocs: &[Bloc]) -> String {
             Bloc::Note { etiquette, segments, ancre, .. } => {
                 notes.push((*ancre, format!("[^{etiquette}]: {}", rendre_segments(segments))));
             }
+            Bloc::Saut { ancre } => bloc_ancre(&mut sortie, *ancre, "* * *".into()),
         }
     }
     vider(&mut sortie, &mut notes);
@@ -252,6 +253,15 @@ mod tests {
         let md = ecrire_markdown(&[titre(2, "Titre"), para(vec![texte("Texte", false, false)])]);
         let a = "<!-- @p12 120,145,880,210 -->";
         assert_eq!(md, format!("{a}\n## Titre\n\n{a}\nTexte\n"));
+    }
+
+    #[test]
+    fn saut_de_section() {
+        let md = ecrire_markdown(&[para(vec![texte("Avant", false, false)]), Bloc::Saut { ancre: ancre() }]);
+        let a = "<!-- @p12 120,145,880,210 -->";
+        assert_eq!(md, format!("{a}\nAvant\n\n{a}\n* * *\n"));
+        // Un paragraphe fait d'étoiles n'est jamais pris pour un saut.
+        assert_eq!(rendu(vec![texte("* * *", false, false)]), "\\* \\* \\*");
     }
 
     #[test]

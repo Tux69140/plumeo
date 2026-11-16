@@ -205,3 +205,30 @@ fn notes_de_fin_de_livre_liees_depuis_les_chapitres_precedents() {
     assert!(deux.contains(r#"<a href="chap-001.xhtml#appel-1">↩</a>"#), "{deux}");
     assert!(deux.contains(r##"href="#note-2""##), "{deux}");
 }
+
+const LIGNE_PLEINE: &str = "Une ligne de corps assez longue pour remplir toute la largeur du bloc";
+
+/// Page pleine : `n` lignes pleines à partir de `y`, puis `derniere`.
+fn page_pleine(y: f32, n: usize, premiere: &'static str, derniere: &'static str) -> Vec<TexteFixture> {
+    let mut page = vec![corps(y, premiere)];
+    page.extend((1..n).map(|i| corps(y + 14.0 * i as f32, LIGNE_PLEINE)));
+    page.push(corps(y + 14.0 * n as f32, derniere));
+    page
+}
+
+#[test]
+fn saut_de_section_apres_une_page_courte() {
+    let p1 = page_pleine(100.0, 40, LIGNE_PLEINE, "Fin de la premiere page.");
+    // Page liminaire courte, sans ponctuation finale : rien ne doit la recoller à la suite.
+    let p2 = [corps(100.0, "ISBN 2-85566-476-4")];
+    let p3 = page_pleine(100.0, 40, "Le lecteur comprendra", "fin du livre.");
+    let pdf = fabriquer_pdf(&[&p1, &p2, &p3]);
+    let doc = DocumentPdf::ouvrir(&pdf).unwrap();
+    let c = convertir_livre(&doc, &reglages(), None, &mut |_, _| {}).unwrap();
+    let md = &c.markdown;
+    assert_eq!(md.matches("* * *").count(), 1, "{md}");
+    let pos = |m: &str| md.find(m).unwrap_or_else(|| panic!("{m} absent : {md}"));
+    assert!(pos("ISBN 2-85566-476-4\n") < pos("* * *"), "{md}");
+    assert!(pos("* * *") < pos("Le lecteur comprendra"), "{md}");
+    assert!(md.contains("-->\n* * *\n"), "le saut a son ancre : {md}");
+}

@@ -1,8 +1,9 @@
 @namespace epub "http://www.idpf.org/2007/ops";
 body { font-family: serif; line-height: 1.4; margin: 0 5%; }
 h1, h2, h3 { font-family: sans-serif; line-height: 1.2; }
-p { margin: 0; text-indent: 1.2em; }
+p { margin: 0 0 0.5em; text-indent: 1.2em; }
 h1 + p, h2 + p, h3 + p { text-indent: 0; }
+hr { width: 20%; margin: 1.5em auto; border: 0; border-top: 1px solid; }
 aside[epub|type~="footnote"] { font-size: 0.8em; margin-top: 0.5em; }
 aside[epub|type~="footnote"] p { text-indent: 0; }
 a[epub|type~="noteref"] { text-decoration: none; }
