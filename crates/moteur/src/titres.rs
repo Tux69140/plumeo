@@ -965,7 +965,7 @@ pub fn detecter_titres(
 /// page 1 entière. Le texte du titre est `titre_livre` tel quel. Si le premier titre de
 /// niveau 1 porte déjà le titre du livre, il est le titre trouvé : dans les
 /// `PAGES_TITRE_LIVRE` premières pages, il remonte de même en tête de sa (demi-)page en
-/// gardant son texte ; plus loin, rien ne bouge. Quand le titre retiré séparait deux
+/// gardant son texte ; plus loin, rien ne bouge. Quand le titre déplacé séparait deux
 /// paragraphes de (demi-)pages différentes, un saut le remplace : ils ne se raccordent
 /// pas. Rien à faire si le titre est vide.
 pub fn placer_titre_livre(mut blocs: Vec<Bloc>, titre_livre: &str) -> Vec<Bloc> {
@@ -1007,10 +1007,11 @@ pub fn placer_titre_livre(mut blocs: Vec<Bloc>, titre_livre: &str) -> Vec<Bloc> 
             let meme_page = |b: &Bloc| (b.ancre().page, b.ancre().moitie) == (ancre.page, ancre.moitie);
             let tete = blocs[..debut].iter().rposition(|b| !meme_page(b)).map_or(0, |i| i + 1);
             blocs.drain(debut..fin);
-            // Le titre séparait deux (demi-)pages : un saut prend sa place, sans quoi
+            // Le titre déplacé séparait deux (demi-)pages : un saut prend sa place, sans quoi
             // le raccord des pages collerait le paragraphe d'avant à celui d'après.
             let separe = |b: &Bloc| matches!(b, Bloc::Paragraphe(_));
-            if let (Some(avant), Some(apres)) = (debut.checked_sub(1).map(|i| &blocs[i]), blocs.get(debut))
+            if tete < debut
+                && let (Some(avant), Some(apres)) = (debut.checked_sub(1).map(|i| &blocs[i]), blocs.get(debut))
                 && separe(avant)
                 && separe(apres)
                 && (avant.ancre().page, avant.ancre().moitie) != (apres.ancre().page, apres.ancre().moitie)
@@ -2051,6 +2052,15 @@ mod tests {
             blocs.iter().map(texte_de).collect::<Vec<_>>(),
             ["# Mon livre", "Omraam Mikhaël Aïvanhov", "Collection Izvor"]
         );
+        // Déjà en tête de sa page : le titre ne bouge pas et sépare toujours les pages.
+        let blocs = vec![
+            para_en(1, 100, "Jean Dupont", true),
+            Bloc::Titre { niveau: 1, texte: "Mon livre".into(), ancre: ancre(2) },
+            para_en(2, 600, "Collection Izvor", false),
+        ];
+        let attendu: Vec<String> = blocs.iter().map(texte_de).collect();
+        let blocs = placer_titre_livre(blocs, "Mon livre");
+        assert_eq!(blocs.iter().map(texte_de).collect::<Vec<_>>(), attendu);
     }
 
     #[test]
