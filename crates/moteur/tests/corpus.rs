@@ -69,6 +69,8 @@ struct Attentes {
     n1_page_min: Option<u32>,
     /// Nombre exact de titres de niveau 2.
     n2: Option<usize>,
+    /// Nombre exact d'entrées de sommaire imprimé rendues cliquables.
+    entrees_sommaire: Option<usize>,
     /// Pages qui doivent porter au moins une note (de ce marqueur s'il est donné).
     #[serde(default)]
     notes_pages: Vec<NotePage>,
@@ -99,6 +101,8 @@ enum Genre {
     Note(String),
     /// Saut de section `* * *` : ni paragraphe ni titre, hors des statistiques.
     Saut,
+    /// Entrée de sommaire imprimé `[texte](#t-…)` : hors des statistiques de paragraphes.
+    Entree,
     Paragraphe,
 }
 
@@ -139,6 +143,7 @@ fn texte_brut(md: &str) -> String {
 }
 
 fn lire_blocs(md: &str) -> Vec<BlocMd> {
+    let entree = Regex::new(r"^\[(.*)\]\(#[^()\s]*\)$").unwrap();
     let mut blocs = Vec::new();
     let mut ancre: Option<Ancre> = None;
     for ligne in md.lines() {
@@ -158,6 +163,8 @@ fn lire_blocs(md: &str) -> Vec<BlocMd> {
             (Genre::Note(marqueur), texte_brut(reste))
         } else if ligne == "* * *" {
             (Genre::Saut, String::new())
+        } else if let Some(c) = entree.captures(ligne) {
+            (Genre::Entree, texte_brut(&c[1]))
         } else {
             (Genre::Paragraphe, texte_brut(ligne))
         };
@@ -317,12 +324,23 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
         blocs.iter().filter(|b| matches!(b.genre, Genre::Titre(n) if n == niveau)).collect()
     };
     // Le titre du livre placé en tête est un titre de service : hors des décomptes
-    // de niveau 1 et de `n1_page_min`.
+    // de niveau 1 et de `n1_page_min`. De même pour le titre « Table des matières » ou
+    // « Sommaire » d'un sommaire imprimé rendu cliquable (suivi d'une entrée).
     let titre_norm = normaliser(&titre_livre);
     let mut n1 = titres(1);
     if n1.first().is_some_and(|b| !titre_norm.is_empty() && normaliser(&b.texte) == titre_norm) {
         n1.remove(0);
     }
+    let titres_de_sommaire: Vec<&BlocMd> = blocs
+        .windows(2)
+        .filter(|w| {
+            matches!(w[1].genre, Genre::Entree)
+                && ["table des matieres", "sommaire"].contains(&normaliser(&w[0].texte).as_str())
+        })
+        .map(|w| &w[0])
+        .collect();
+    n1.retain(|b| !titres_de_sommaire.iter().any(|s| std::ptr::eq(*s, *b)));
+    let entrees = blocs.iter().filter(|b| matches!(b.genre, Genre::Entree)).count();
     let n1_prefixes = n1
         .iter()
         .filter(|b| a.prefixe_n1.as_ref().is_none_or(|p| b.texte.starts_with(p.as_str())))
@@ -364,6 +382,11 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
         && titres(2).len() != n
     {
         echecs.push(format!("{} titres de niveau 2 au lieu de {n}", titres(2).len()));
+    }
+    if let Some(n) = a.entrees_sommaire
+        && entrees != n
+    {
+        echecs.push(format!("{entrees} entrées de sommaire au lieu de {n}"));
     }
     for t in &a.titres_contiennent {
         if !blocs.iter().any(|b| matches!(b.genre, Genre::Titre(_)) && b.texte.contains(t.as_str())) {
@@ -408,7 +431,7 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
     }
 
     println!(
-        "{} : {:.1} s, titres {} (n1 {}, n1{qualif} {}, n2 {}), {} notes, paragraphes {} (médiane {med}, max {max}), {} retraits, {} points",
+        "{} : {:.1} s, titres {} (n1 {}, n1{qualif} {}, n2 {}), {entrees} entrées de sommaire, {} notes, paragraphes {} (médiane {med}, max {max}), {} retraits, {} points",
         entree.fichier,
         duree,
         source_texte(conversion.source_titres),

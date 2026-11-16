@@ -1,7 +1,61 @@
 //! Écriture du Markdown interne : chaque bloc est précédé de son ancre.
 
+use std::collections::HashSet;
+
 use crate::blocs::{Bloc, Segment};
 use crate::modele::Ancre;
+
+/// Caractère gardé dans un identifiant de titre : lettre ou chiffre qui peut figurer
+/// dans un nom XML (un exposant « ² » ne le peut pas).
+fn lettre_d_identifiant(c: char) -> bool {
+    c.is_alphanumeric()
+        && (c.is_ascii()
+            || matches!(c as u32,
+                0xC0..=0xD6 | 0xD8..=0xF6 | 0xF8..=0x2FF | 0x370..=0x37D | 0x37F..=0x1FFF
+                | 0x2070..=0x218F | 0x2C00..=0x2FEF | 0x3001..=0xD7FF | 0xF900..=0xFDCF
+                | 0xFDF0..=0xFFFD | 0x10000..=0xEFFFF))
+}
+
+/// Identifiant d'un titre (attribut `id` dans l'EPUB, cible des entrées de sommaire) :
+/// `t-` puis le texte en minuscules, chaque suite de caractères qui ne sont ni lettre
+/// ni chiffre devenant un tiret (aucun tiret en bord). Le préfixe en fait un nom XML
+/// valide. Copie exacte de `plumeo_epub::ancre_titre` (vérifiée par un test).
+pub fn ancre_titre(texte: &str) -> String {
+    let mut sortie = String::from("t");
+    let mut tiret = true;
+    for c in texte.chars().flat_map(char::to_lowercase) {
+        if lettre_d_identifiant(c) {
+            if tiret {
+                sortie.push('-');
+                tiret = false;
+            }
+            sortie.push(c);
+        } else {
+            tiret = true;
+        }
+    }
+    sortie
+}
+
+/// Identifiants des titres d'un livre, dans l'ordre : un identifiant déjà pris reçoit
+/// `-2`, `-3`… (comme les titres de l'EPUB).
+#[derive(Default)]
+pub struct AncresTitres {
+    pris: HashSet<String>,
+}
+
+impl AncresTitres {
+    pub fn attribuer(&mut self, texte: &str) -> String {
+        let base = ancre_titre(texte);
+        let mut id = base.clone();
+        let mut n = 1;
+        while !self.pris.insert(id.clone()) {
+            n += 1;
+            id = format!("{base}-{n}");
+        }
+        id
+    }
+}
 
 /// Échappe le texte pour le Markdown ; en début de bloc, échappe aussi ce qui
 /// serait pris pour un titre, une citation, une liste ou une liste numérotée.
@@ -146,6 +200,9 @@ pub fn ecrire_markdown(blocs: &[Bloc]) -> String {
                 notes.push((*ancre, format!("[^{etiquette}]: {}", rendre_segments(segments))));
             }
             Bloc::Saut { ancre } => bloc_ancre(&mut sortie, *ancre, "* * *".into()),
+            Bloc::EntreeSommaire { segments, cible, ancre } => {
+                bloc_ancre(&mut sortie, *ancre, format!("[{}](#{cible})", rendre_segments(segments)));
+            }
         }
     }
     vider(&mut sortie, &mut notes);
@@ -268,6 +325,44 @@ mod tests {
     fn titre_sur_une_seule_ligne() {
         let md = ecrire_markdown(&[titre(1, "Un\r\ndeux\rtrois")]);
         assert_eq!(md.lines().nth(1), Some("# Un  deux trois"), "{md}");
+    }
+
+    #[test]
+    fn ancre_d_un_titre() {
+        assert_eq!(ancre_titre("1 VISITE À PATMOS"), "t-1-visite-à-patmos");
+        assert_eq!(ancre_titre("I. La pierre cubique"), "t-i-la-pierre-cubique");
+        assert_eq!(ancre_titre("  L’Archange : « Mikhaël » !  "), "t-l-archange-mikhaël");
+        // Lettre ou chiffre hors des noms XML (exposant ²) : un séparateur comme un autre.
+        assert_eq!(ancre_titre("E = mc²"), "t-e-mc");
+        assert_eq!(ancre_titre(" … "), "t");
+    }
+
+    #[test]
+    fn ancres_de_titres_uniques() {
+        let mut ancres = AncresTitres::default();
+        assert_eq!(ancres.attribuer("Introduction"), "t-introduction");
+        assert_eq!(ancres.attribuer("INTRODUCTION"), "t-introduction-2");
+        assert_eq!(ancres.attribuer("Introduction !"), "t-introduction-3");
+        assert_eq!(ancres.attribuer("Introduction 2"), "t-introduction-2-2");
+        assert_eq!(ancres.attribuer("Conclusion"), "t-conclusion");
+    }
+
+    #[test]
+    fn entree_de_sommaire_en_lien() {
+        let entree = Bloc::EntreeSommaire {
+            segments: vec![texte("1. VISITE À PATMOS", true, false)],
+            cible: "t-1-visite-à-patmos".into(),
+            ancre: ancre(),
+        };
+        let md = ecrire_markdown(&[entree]);
+        assert_eq!(md.lines().nth(1), Some("[**1. VISITE À PATMOS**](#t-1-visite-à-patmos)"), "{md}");
+        let entree = Bloc::EntreeSommaire {
+            segments: vec![texte("Préface [suite] ........ 7", false, false)],
+            cible: "t-préface".into(),
+            ancre: ancre(),
+        };
+        let md = ecrire_markdown(&[entree]);
+        assert_eq!(md.lines().nth(1), Some("[Préface \\[suite\\] ........ 7](#t-préface)"), "{md}");
     }
 
     #[test]

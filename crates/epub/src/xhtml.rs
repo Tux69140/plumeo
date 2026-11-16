@@ -1,8 +1,8 @@
 //! Rendu XHTML : corps de chapitre, notes, pages complètes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use pulldown_cmark::{Event, html::push_html};
+use pulldown_cmark::{Event, Tag, TagEnd, html::push_html};
 
 pub fn echapper(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
@@ -68,6 +68,58 @@ fn assainir_html(html: &str) -> String {
     sortie
 }
 
+/// Caractère gardé dans un identifiant de titre : lettre ou chiffre qui peut figurer
+/// dans un nom XML (un exposant « ² » ne le peut pas).
+fn lettre_d_identifiant(c: char) -> bool {
+    c.is_alphanumeric()
+        && (c.is_ascii()
+            || matches!(c as u32,
+                0xC0..=0xD6 | 0xD8..=0xF6 | 0xF8..=0x2FF | 0x370..=0x37D | 0x37F..=0x1FFF
+                | 0x2070..=0x218F | 0x2C00..=0x2FEF | 0x3001..=0xD7FF | 0xF900..=0xFDCF
+                | 0xFDF0..=0xFFFD | 0x10000..=0xEFFFF))
+}
+
+/// Identifiant d'un titre : `t-` puis le texte en minuscules, chaque suite de
+/// caractères qui ne sont ni lettre ni chiffre devenant un tiret (aucun tiret en bord).
+/// Copie exacte de `plumeo_moteur::markdown::ancre_titre`, qui écrit les liens du
+/// sommaire imprimé ; un test du moteur vérifie que les deux donnent le même résultat.
+pub fn ancre_titre(texte: &str) -> String {
+    let mut sortie = String::from("t");
+    let mut tiret = true;
+    for c in texte.chars().flat_map(char::to_lowercase) {
+        if lettre_d_identifiant(c) {
+            if tiret {
+                sortie.push('-');
+                tiret = false;
+            }
+            sortie.push(c);
+        } else {
+            tiret = true;
+        }
+    }
+    sortie
+}
+
+/// Identifiants des titres du livre, dans l'ordre : un identifiant déjà pris reçoit
+/// `-2`, `-3`… (comme `plumeo_moteur::markdown::AncresTitres`).
+#[derive(Default)]
+pub struct AncresTitres {
+    pris: HashSet<String>,
+}
+
+impl AncresTitres {
+    pub fn attribuer(&mut self, texte: &str) -> String {
+        let base = ancre_titre(texte);
+        let mut id = base.clone();
+        let mut n = 1;
+        while !self.pris.insert(id.clone()) {
+            n += 1;
+            id = format!("{base}-{n}");
+        }
+        id
+    }
+}
+
 /// Nom du fichier XHTML du chapitre d'indice `i` (base 0).
 pub fn nom_chapitre(i: usize) -> String {
     format!("chap-{:03}.xhtml", i + 1)
@@ -99,11 +151,14 @@ pub fn fusionner_appels_orphelins(evenements: Vec<Event<'static>>) -> Vec<Event<
     sortie
 }
 
-/// Renvois de notes à l'échelle du livre : un appel peut se trouver dans un autre
-/// chapitre que sa définition (notes de fin de livre). Les identifiants `appel-…`
-/// sont numérotés sur tout le livre, donc uniques.
+/// Renvois à l'échelle du livre. Notes : un appel peut se trouver dans un autre
+/// chapitre que sa définition (notes de fin de livre) ; les identifiants `appel-…`
+/// sont numérotés sur tout le livre, donc uniques. Titres : un lien `#id` (entrée du
+/// sommaire imprimé) mène au fichier du chapitre qui porte ce titre.
 #[derive(Default)]
 pub struct Renvois {
+    /// Identifiant de titre → chapitre qui le porte.
+    titres: HashMap<String, usize>,
     /// Étiquette → chapitre de sa (première) définition.
     definitions: HashMap<String, usize>,
     /// Étiquette → chapitre de son premier appel.
@@ -113,6 +168,10 @@ pub struct Renvois {
 }
 
 impl Renvois {
+    pub fn recenser_titre(&mut self, id: &str, chapitre: usize) {
+        self.titres.insert(id.to_string(), chapitre);
+    }
+
     /// Recense les appels et définitions d'un chapitre, dans l'ordre du rendu
     /// (corps puis contenu des notes).
     pub fn recenser(
@@ -146,8 +205,24 @@ fn lien(cible: usize, courant: usize, prefixe: &str, id: &str) -> String {
 
 fn rendre(evenements: Vec<Event<'static>>, chapitre: usize, renvois: &mut Renvois) -> String {
     let mut rendus = Vec::new();
+    // Pour chaque lien ouvert : est-il rendu (cible connue) ?
+    let mut liens: Vec<bool> = Vec::new();
     for e in evenements {
         rendus.push(match e {
+            // Lien vers un titre : vers le fichier de son chapitre ; sans cible connue,
+            // texte simple (pas de lien cassé).
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                let cible = dest_url.strip_prefix('#').and_then(|id| Some((id, *renvois.titres.get(id)?)));
+                liens.push(cible.is_some());
+                match cible {
+                    Some((id, c)) => Event::Html(format!("<a href=\"{}#{}\">", nom_chapitre(c), echapper(id)).into()),
+                    None => continue,
+                }
+            }
+            Event::End(TagEnd::Link) => match liens.pop() {
+                Some(true) => Event::Html("</a>".into()),
+                _ => continue,
+            },
             Event::Html(h) => Event::Html(assainir_html(&h).into()),
             Event::InlineHtml(h) => Event::InlineHtml(assainir_html(&h).into()),
             Event::FootnoteReference(l) => {

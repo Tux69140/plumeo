@@ -42,6 +42,7 @@ Propres à un livre (un champ absent ou `null` n'est pas vérifié) :
 | `n1_max` | nombre maximal de titres de niveau 1, tous confondus |
 | `n1_page_min` | aucun titre de niveau 1 avant cette page (titres du corps, pas d'un résumé) |
 | `n2` | nombre exact de titres de niveau 2 |
+| `entrees_sommaire` | nombre exact d'entrées de sommaire imprimé rendues cliquables (`[texte](#t-…)`) |
 | `titres_contiennent` | textes qu'au moins un titre doit contenir |
 | `notes_pages` | `{ "page", "marqueur" }` : au moins une note ancrée sur la page (de ce marqueur) |
 | `notes_min` | nombre minimal de notes appariées |
@@ -56,6 +57,13 @@ titre de niveau 1, s'il porte ce titre (texte normalisé), est hors de `titres_n
 `n1_max` et `n1_page_min`. Aucun attendu ne change ; seul l'affichage de Connaissance passe
 de n1 1 à n1 0 (son titre « CONNAISSANCE LOGIQUE PENSÉE PRATIQUE », déjà détecté, est le
 titre du livre).
+
+Les entrées d'un sommaire imprimé rendues cliquables (lignes `[texte](#t-…)`) ne sont pas des
+paragraphes : elles sont hors des statistiques de paragraphes. Le titre « Table des matières »
+ou « Sommaire » de niveau 1 suivi d'une entrée est lui aussi un titre de service, hors des
+mêmes décomptes. Chronique de l'Akasha passe ainsi de `titres_n1` 23 à 22 : son « SOMMAIRE »
+(signet) mène désormais à 12 entrées cliquables. Approche de la Cité céleste attend 22 entrées
+(17 chapitres et les 5 parties du chapitre 17).
 
 `derogations` (`raison`, `mediane_paragraphes_min`, `nombres_isoles_pages`) assouplit
 une attente **commune** que le livre ne peut pas tenir, pour une raison mesurée et

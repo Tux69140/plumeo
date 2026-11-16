@@ -250,13 +250,49 @@ fn titre_vide_retombe_sur_le_titre_du_livre() {
 }
 
 #[test]
+fn titres_identifies_dans_tout_le_livre() {
+    let (_d, c) = fabriquer("# A\n\n## A1\n\n### Détail\n\nx\n\n# B\n\n## A1\n\ny\n", None);
+    let e = entrees(&c);
+    let a = texte(&e, "OEBPS/chap-001.xhtml");
+    let b = texte(&e, "OEBPS/chap-002.xhtml");
+    assert!(a.contains(r#"<h1 id="t-a">A</h1>"#), "{a}");
+    assert!(a.contains(r#"<h2 id="t-a1">A1</h2>"#), "{a}");
+    assert!(a.contains(r#"<h3 id="t-détail">Détail</h3>"#), "{a}");
+    assert!(b.contains(r#"<h1 id="t-b">B</h1>"#), "{b}");
+    assert!(b.contains(r#"<h2 id="t-a1-2">A1</h2>"#), "{b}");
+    let nav = texte(&e, "OEBPS/nav.xhtml");
+    assert!(nav.contains(r##"<a href="chap-001.xhtml#t-a1">A1</a>"##), "{nav}");
+    assert!(nav.contains(r##"<a href="chap-002.xhtml#t-a1-2">A1</a>"##), "{nav}");
+    assert!(!nav.contains("#s1"), "{nav}");
+}
+
+#[test]
+fn liens_du_sommaire_vers_le_fichier_du_titre() {
+    let md = "# Table des matières\n\n[**1. VISITE À PATMOS**](#t-1-visite-à-patmos)\n\n[Perdu](#t-perdu)\n\n[Ailleurs](https://exemple.org)\n\n# 1 VISITE À PATMOS\n\nx\n";
+    let (_d, c) = fabriquer(md, None);
+    let e = entrees(&c);
+    let table = texte(&e, "OEBPS/chap-001.xhtml");
+    assert!(table.contains(r##"<a href="chap-002.xhtml#t-1-visite-à-patmos"><strong>1. VISITE À PATMOS</strong></a>"##), "{table}");
+    // Sans cible connue : texte simple, aucun lien cassé.
+    assert!(table.contains("<p>Perdu</p>"), "{table}");
+    assert!(table.contains("<p>Ailleurs</p>"), "{table}");
+    assert_eq!(table.matches("<a ").count(), 1, "{table}");
+    assert!(texte(&e, "OEBPS/chap-002.xhtml").contains(r#"<h1 id="t-1-visite-à-patmos">"#));
+}
+
+#[test]
+fn ancre_titre_publique() {
+    assert_eq!(plumeo_epub::ancre_titre("1 VISITE À PATMOS"), "t-1-visite-à-patmos");
+}
+
+#[test]
 #[ignore]
 fn epubcheck() {
     let Ok(jar) = std::env::var("EPUBCHECK_JAR") else {
         eprintln!("EPUBCHECK_JAR non défini");
         return;
     };
-    let md = "<!-- @p1 1,2,3,4 -->\n# Un\n\nTexte[^1-1] et[^2-*] puis[^3-3].\n\n## Sous\n\nSuite 1<sup>er</sup>.\n\n[^1-1]: N1.\n\n[^2-*]: N2.\n\n# Deux\n\nAutre.\n\n[^3-3]: N3, en fin de livre.\n";
+    let md = "<!-- @p1 1,2,3,4 -->\n# Table des matières\n\n[**1. Un été à Patmos**](#t-1-un-été-à-patmos)\n\n[Sous](#t-sous)\n\n[Perdu](#t-perdu)\n\n# 1 Un été à Patmos\n\nTexte[^1-1] et[^2-*] puis[^3-3].\n\n## Sous\n\nSuite 1<sup>er</sup>.\n\n[^1-1]: N1.\n\n[^2-*]: N2.\n\n# Deux\n\nAutre.\n\n[^3-3]: N3, en fin de livre.\n";
     let (_d, c) = fabriquer(md, Some(PNG));
     let s = std::process::Command::new("java").args(["-jar", &jar]).arg(&c).status().unwrap();
     assert!(s.success());

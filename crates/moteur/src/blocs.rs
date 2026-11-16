@@ -1,4 +1,4 @@
-//! Modèle des blocs produits par le moteur : paragraphes, titres et notes.
+//! Modèle des blocs produits par le moteur : paragraphes, titres, notes et entrées de sommaire.
 
 use crate::modele::Ancre;
 
@@ -42,13 +42,19 @@ pub enum Bloc {
     /// Saut de section : la page précédente s'arrête bien avant le bas du bloc de texte
     /// (page liminaire, colophon, fin de partie). Ancre : première ligne de la page suivante.
     Saut { ancre: Ancre },
+    /// Entrée d'un sommaire imprimé : lien vers le titre d'identifiant `cible`
+    /// (voir `markdown::ancre_titre`).
+    EntreeSommaire { segments: Vec<Segment>, cible: String, ancre: Ancre },
 }
 
 impl Bloc {
     pub fn ancre(&self) -> Ancre {
         match self {
             Bloc::Paragraphe(p) => p.ancre,
-            Bloc::Titre { ancre, .. } | Bloc::Note { ancre, .. } | Bloc::Saut { ancre } => *ancre,
+            Bloc::Titre { ancre, .. }
+            | Bloc::Note { ancre, .. }
+            | Bloc::Saut { ancre }
+            | Bloc::EntreeSommaire { ancre, .. } => *ancre,
         }
     }
 }

@@ -268,3 +268,78 @@ fn titre_du_livre_introuvable_insere_page_1() {
     let sans = convertir_livre(&doc, &reglages(), "", None, &mut |_, _| {}).unwrap();
     assert!(lignes_de_texte(&sans.markdown)[0] == "# CHAPITRE UN", "{}", sans.markdown);
 }
+
+#[test]
+fn ancre_titre_identique_dans_le_moteur_et_l_epub() {
+    for titre in [
+        "1 VISITE À PATMOS",
+        "I. La pierre cubique",
+        "V. L'avènement de la Nouvelle Jérusalem",
+        "  L’Archange : « Mikhaël » !  ",
+        "LES 144.000 SERVITEURS DE DIEU",
+        "E = mc²",
+        "Ⅳ ① İstanbul ǅ ß",
+        "",
+        "…",
+    ] {
+        assert_eq!(
+            plumeo_moteur::markdown::ancre_titre(titre),
+            plumeo_epub::ancre_titre(titre),
+            "« {titre} »"
+        );
+    }
+}
+
+#[test]
+fn sommaire_imprime_cliquable_jusque_dans_l_epub() {
+    use std::io::Read;
+    let titre = |y: f32, texte: &'static str| t(y, texte, 20.0, StyleFixture::Gras);
+    let p1 = [titre(100.0, "1 Le depart"), corps(200.0, "Un avant-propos qui porte le meme titre.")];
+    let p2 = [
+        corps(100.0, "Table des matieres"),
+        corps(160.0, "1. Le depart .......... 3"),
+        corps(200.0, "2. Le retour .......... 4"),
+        corps(240.0, "3. La fin .......... 5"),
+    ];
+    let p3 = [titre(100.0, "1 Le depart"), corps(200.0, "Premier paragraphe du chapitre un.")];
+    let p4 = [titre(100.0, "2 Le retour"), corps(200.0, "Premier paragraphe du chapitre deux.")];
+    let p5 = [titre(100.0, "3 La fin"), corps(200.0, "Premier paragraphe du chapitre trois.")];
+    let pdf = fabriquer_pdf(&[&p1, &p2, &p3, &p4, &p5]);
+    let doc = DocumentPdf::ouvrir(&pdf).unwrap();
+    let c = convertir_livre(&doc, &reglages(), "", None, &mut |_, _| {}).unwrap();
+    let md = &c.markdown;
+    let lignes = lignes_de_texte(md);
+    let table = lignes.iter().position(|l| *l == "# Table des matieres").unwrap_or_else(|| panic!("{md}"));
+    assert_eq!(
+        lignes[table + 1..table + 4],
+        [
+            "[1\\. Le depart .......... 3](#t-1-le-depart-2)",
+            "[2\\. Le retour .......... 4](#t-2-le-retour)",
+            "[3\\. La fin .......... 5](#t-3-la-fin)",
+        ],
+        "{md}"
+    );
+    assert!(c.points.iter().any(|p| p.genre == GenrePoint::Sommaire && p.ancre.page == 2), "{:?}", c.points);
+
+    let dir = tempfile::tempdir().unwrap();
+    let chemin = dir.path().join("livre.epub");
+    let meta = plumeo_epub::Metadonnees {
+        titre: "Livre".into(),
+        auteur: String::new(),
+        langue: "fr".into(),
+        identifiant: "urn:uuid:12345678-1234-1234-1234-123456789abc".into(),
+        modifie: "2026-11-10T12:00:00Z".into(),
+    };
+    plumeo_epub::generer_epub(md, &meta, None, &chemin).unwrap();
+    let mut z = zip::ZipArchive::new(std::fs::File::open(&chemin).unwrap()).unwrap();
+    let mut lire = |nom: &str| {
+        let mut s = String::new();
+        z.by_name(nom).unwrap().read_to_string(&mut s).unwrap();
+        s
+    };
+    let sommaire = lire("OEBPS/chap-002.xhtml");
+    assert!(sommaire.contains(r#"<a href="chap-003.xhtml#t-1-le-depart-2">"#), "{sommaire}");
+    assert!(sommaire.contains(r#"<a href="chap-005.xhtml#t-3-la-fin">"#), "{sommaire}");
+    assert!(lire("OEBPS/chap-001.xhtml").contains(r#"<h1 id="t-1-le-depart">"#));
+    assert!(lire("OEBPS/chap-003.xhtml").contains(r#"<h1 id="t-1-le-depart-2">"#));
+}

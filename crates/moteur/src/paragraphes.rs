@@ -849,6 +849,7 @@ mod tests {
                 Bloc::Titre { .. } => 'T',
                 Bloc::Note { .. } => 'N',
                 Bloc::Saut { .. } => 'S',
+                Bloc::EntreeSommaire { .. } => 'E',
             })
             .collect()
     }

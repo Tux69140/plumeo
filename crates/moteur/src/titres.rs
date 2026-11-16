@@ -9,6 +9,7 @@ use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
 use crate::blocs::{Bloc, Paragraphe, Segment};
+use crate::markdown::AncresTitres;
 use crate::modele::{Ancre, Moitie, Signet};
 use crate::points::{GenrePoint, PointAVerifier};
 use crate::reglages::SourceTitres;
@@ -992,6 +993,123 @@ pub fn placer_titre_livre(mut blocs: Vec<Bloc>, titre_livre: &str) -> Vec<Bloc> 
     blocs
 }
 
+/// Numéro de page en fin d'entrée de sommaire, après une espace ou des points de conduite.
+static NUMERO_FINAL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[\s.\u{2026}]+\d{1,4}\s*$").expect("motif valide"));
+
+/// Titres d'un sommaire imprimé (paragraphe placé juste avant la première entrée).
+const TITRES_DE_SOMMAIRE: [&str; 2] = ["table des matieres", "sommaire"];
+
+/// Sommaire imprimé rendu cliquable. Une page de sommaire est une page dont au moins
+/// 3 paragraphes, et au moins la moitié, portent le texte d'un titre situé sur une
+/// autre page (`normaliser_titre`, sans le numéro de page final ni les points de
+/// conduite) ; la page qui suit directement une page de sommaire en est aussi une si
+/// tous ses paragraphes en portent un. Le titre visé est le premier de ce texte après la
+/// page de l'entrée, à défaut le premier du livre ; le titre du livre (premier titre de
+/// niveau 1, s'il porte `titre_livre`) n'est jamais visé. Sur ces pages, chaque paragraphe
+/// qui vise un titre (sans appel de note) devient une `EntreeSommaire` (cible : identifiant
+/// du titre, voir `markdown::ancre_titre`) et le paragraphe « Table des matières » ou
+/// « Sommaire » placé juste avant la première entrée devient un titre de niveau 1.
+/// Renvoie aussi un point `Sommaire` par page de sommaire.
+pub fn sommaire_cliquable(mut blocs: Vec<Bloc>, titre_livre: &str) -> (Vec<Bloc>, Vec<PointAVerifier>) {
+    let titre_livre = normaliser_titre(titre_livre.trim());
+    let livre = blocs.iter().position(|b| matches!(b, Bloc::Titre { niveau: 1, .. })).filter(|&i| match &blocs[i] {
+        Bloc::Titre { texte, .. } => !titre_livre.is_empty() && normaliser_titre(texte) == titre_livre,
+        _ => false,
+    });
+    // Texte normalisé → (indice, page) des titres qui le portent, dans l'ordre du livre.
+    let mut titres: HashMap<String, Vec<(usize, u32)>> = HashMap::new();
+    for (i, bloc) in blocs.iter().enumerate() {
+        if let Bloc::Titre { texte, ancre, .. } = bloc
+            && Some(i) != livre
+        {
+            let norm = normaliser_titre(texte);
+            if !norm.is_empty() {
+                titres.entry(norm).or_default().push((i, ancre.page));
+            }
+        }
+    }
+    let cible = |p: &Paragraphe| -> Option<usize> {
+        // Un appel de note ne peut pas figurer dans un lien (lien imbriqué).
+        if p.segments.iter().any(|s| matches!(s, Segment::AppelNote { .. })) {
+            return None;
+        }
+        let texte = p.texte_brut();
+        let texte = texte.trim();
+        let sans_numero = NUMERO_FINAL.replace(texte, "");
+        [texte, &sans_numero].into_iter().find_map(|t| {
+            let autres = || {
+                titres.get(&normaliser_titre(t)).into_iter().flatten().filter(|(_, page)| *page != p.ancre.page)
+            };
+            autres().find(|(_, page)| *page > p.ancre.page).or_else(|| autres().next()).map(|(i, _)| *i)
+        })
+    };
+
+    // Par page : paragraphes et titre visé par chacun.
+    let mut par_page: BTreeMap<u32, Vec<(usize, Option<usize>)>> = BTreeMap::new();
+    for (i, bloc) in blocs.iter().enumerate() {
+        if let Bloc::Paragraphe(p) = bloc {
+            par_page.entry(p.ancre.page).or_default().push((i, cible(p)));
+        }
+    }
+    let mut pages: BTreeSet<u32> = BTreeSet::new();
+    for (page, paragraphes) in &par_page {
+        let entrees = paragraphes.iter().filter(|(_, c)| c.is_some()).count();
+        let suite = page.checked_sub(1).is_some_and(|p| pages.contains(&p));
+        if (entrees >= MIN_TITRES_NIVEAU && entrees * 2 >= paragraphes.len())
+            || (suite && entrees == paragraphes.len())
+        {
+            pages.insert(*page);
+        }
+    }
+    let entrees: BTreeMap<usize, usize> = pages
+        .iter()
+        .flat_map(|page| par_page[page].iter().filter_map(|&(i, c)| Some((i, c?))))
+        .collect();
+
+    // Titre du sommaire, avant la première entrée de chaque suite de pages.
+    for page in pages.iter().filter(|p| p.checked_sub(1).is_none_or(|p| !pages.contains(&p))) {
+        let premiere = par_page[page].iter().find_map(|&(i, c)| c.map(|_| i)).expect("page avec entrées");
+        let avant = blocs[..premiere].iter().rposition(|b| !matches!(b, Bloc::Note { .. }));
+        if let Some(j) = avant
+            && let Bloc::Paragraphe(p) = &blocs[j]
+            && TITRES_DE_SOMMAIRE.contains(&normaliser(&p.texte_brut()).as_str())
+        {
+            blocs[j] = Bloc::Titre { niveau: 1, texte: p.texte_brut().trim().to_string(), ancre: p.ancre };
+        }
+    }
+
+    // Identifiants de tous les titres, dans l'ordre du Markdown.
+    let mut ancres = AncresTitres::default();
+    let ids: HashMap<usize, String> = blocs
+        .iter()
+        .enumerate()
+        .filter_map(|(i, b)| match b {
+            Bloc::Titre { texte, .. } => Some((i, ancres.attribuer(texte))),
+            _ => None,
+        })
+        .collect();
+    for (i, titre) in entrees {
+        let Bloc::Paragraphe(p) = &mut blocs[i] else { unreachable!("entrée de sommaire hors paragraphe") };
+        let segments = std::mem::take(&mut p.segments);
+        blocs[i] = Bloc::EntreeSommaire { segments, cible: ids[&titre].clone(), ancre: p.ancre };
+    }
+
+    let points = pages
+        .iter()
+        .filter_map(|page| blocs.iter().find(|b| b.ancre().page == *page))
+        .map(|bloc| PointAVerifier {
+            ancre: bloc.ancre(),
+            genre: GenrePoint::Sommaire,
+            message: format!(
+                "la page {} est un sommaire imprimé : ses entrées renvoient aux titres",
+                bloc.ancre().page
+            ),
+        })
+        .collect();
+    (blocs, points)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1740,6 +1858,7 @@ mod tests {
             Bloc::Titre { niveau, texte, .. } => format!("{} {texte}", "#".repeat(*niveau as usize)),
             Bloc::Note { marqueur, .. } => format!("[{marqueur}]"),
             Bloc::Saut { .. } => "* * *".into(),
+            Bloc::EntreeSommaire { cible, .. } => format!("→ {cible}"),
         }
     }
 
@@ -1817,5 +1936,167 @@ mod tests {
             corps(1, &texte_long()),
         ];
         assert_eq!(placer_titre_livre(deja, "Mon livre").iter().map(texte_de).collect::<Vec<_>>()[0], "# MON LIVRE");
+    }
+
+    fn titre_en(niveau: u8, page: u32, texte: &str) -> Bloc {
+        Bloc::Titre { niveau, texte: texte.into(), ancre: ancre(page) }
+    }
+
+    /// Texte et cible des blocs : `[texte](#cible)` pour une entrée de sommaire.
+    fn rendu_sommaire(blocs: &[Bloc]) -> Vec<String> {
+        blocs
+            .iter()
+            .map(|b| match b {
+                Bloc::EntreeSommaire { segments, cible, .. } => {
+                    let texte: String = segments
+                        .iter()
+                        .map(|s| match s {
+                            Segment::Texte { texte, .. } | Segment::Exposant(texte) => texte.as_str(),
+                            Segment::AppelNote { marqueur, .. } => marqueur.as_str(),
+                        })
+                        .collect();
+                    format!("[{texte}](#{cible})")
+                }
+                autre => texte_de(autre),
+            })
+            .collect()
+    }
+
+    fn livre_avec_sommaire() -> Vec<Bloc> {
+        vec![
+            titre_en(1, 1, "Mon livre"),
+            para_en(2, 100, "Table des matières", true),
+            para_en(2, 200, "1. Premier chapitre ........ 5", true),
+            para_en(2, 240, "2. DEUXIÈME CHAPITRE 9", true),
+            para_en(2, 280, "Un mot de l’éditeur", false),
+            para_en(2, 320, "3. Le troisième", true),
+            para_en(3, 100, "I. La pierre", false),
+            titre_en(1, 5, "1 Premier chapitre"),
+            corps(5, &texte_long()),
+            titre_en(1, 9, "2 Deuxième chapitre"),
+            corps(9, &texte_long()),
+            titre_en(1, 12, "3 Le troisième"),
+            titre_en(2, 12, "I. La pierre"),
+            corps(12, &texte_long()),
+        ]
+    }
+
+    #[test]
+    fn sommaire_imprime_rendu_cliquable() {
+        let (blocs, points) = sommaire_cliquable(livre_avec_sommaire(), "Mon livre");
+        assert_eq!(
+            rendu_sommaire(&blocs)[..8],
+            [
+                "# Mon livre",
+                "# Table des matières",
+                "[1. Premier chapitre ........ 5](#t-1-premier-chapitre)",
+                "[2. DEUXIÈME CHAPITRE 9](#t-2-deuxième-chapitre)",
+                "Un mot de l’éditeur",
+                "[3. Le troisième](#t-3-le-troisième)",
+                // Page suivante dont tous les paragraphes sont des entrées.
+                "[I. La pierre](#t-i-la-pierre)",
+                "# 1 Premier chapitre",
+            ]
+        );
+        assert_eq!(blocs[1].ancre(), Ancre { page: 2, moitie: Moitie::Entiere, rect: [100, 100, 900, 130] });
+        let pages: Vec<u32> =
+            points.iter().filter(|p| p.genre == GenrePoint::Sommaire).map(|p| p.ancre.page).collect();
+        assert_eq!(pages, [2, 3]);
+    }
+
+    #[test]
+    fn sommaire_imprime_trop_peu_d_entrees() {
+        // Deux entrées seulement.
+        let mut blocs = livre_avec_sommaire();
+        blocs.remove(5);
+        let (blocs, points) = sommaire_cliquable(blocs, "Mon livre");
+        assert!(blocs.iter().all(|b| !matches!(b, Bloc::EntreeSommaire { .. })));
+        assert!(rendu_sommaire(&blocs).contains(&"Table des matières".to_string()));
+        assert!(points.is_empty());
+        // Trois entrées, mais moins de la moitié des paragraphes de la page.
+        let mut blocs = livre_avec_sommaire();
+        for i in 0..4 {
+            blocs.insert(2, para_en(2, 150 + i, "Une ligne qui ne renvoie à aucun titre", false));
+        }
+        let (blocs, _) = sommaire_cliquable(blocs, "Mon livre");
+        assert!(blocs.iter().all(|b| !matches!(b, Bloc::EntreeSommaire { .. })));
+    }
+
+    #[test]
+    fn page_suivante_du_sommaire_entierement_faite_d_entrees() {
+        let mut blocs = livre_avec_sommaire();
+        blocs.insert(7, para_en(3, 300, "Achevé d’imprimer", false));
+        let (blocs, points) = sommaire_cliquable(blocs, "Mon livre");
+        let rendu = rendu_sommaire(&blocs);
+        assert_eq!(rendu[6..8], ["I. La pierre", "Achevé d’imprimer"]);
+        assert_eq!(points.len(), 1);
+    }
+
+    #[test]
+    fn cible_du_sommaire_titre_d_une_autre_page_jamais_le_titre_du_livre() {
+        let blocs = vec![
+            titre_en(1, 1, "Mon livre"),
+            titre_en(1, 1, "Introduction"),
+            corps(1, &texte_long()),
+            para_en(2, 100, "Sommaire", false),
+            para_en(2, 200, "Introduction", false),
+            para_en(2, 240, "Conclusion 12", false),
+            para_en(2, 280, "Mon livre", false),
+            para_en(2, 320, "Annexe", false),
+            titre_en(2, 2, "Annexe"),
+            titre_en(1, 4, "Introduction"),
+            corps(4, &texte_long()),
+            titre_en(1, 8, "Conclusion"),
+            titre_en(1, 9, "Annexe"),
+            titre_en(1, 12, "Conclusion"),
+        ];
+        let (blocs, _) = sommaire_cliquable(blocs, "Mon livre");
+        assert_eq!(
+            rendu_sommaire(&blocs)[3..8],
+            [
+                "# Sommaire",
+                // Premier titre après la page du sommaire ; identifiants uniques dans tout le livre.
+                "[Introduction](#t-introduction-2)",
+                "[Conclusion 12](#t-conclusion)",
+                // Le titre du livre n'est jamais une cible.
+                "Mon livre",
+                // Le titre de la même page n'est pas une cible.
+                "[Annexe](#t-annexe-2)",
+            ]
+        );
+    }
+
+    #[test]
+    fn cible_du_sommaire_avant_la_page_a_defaut() {
+        let blocs = vec![
+            titre_en(1, 1, "Un"),
+            titre_en(1, 2, "Deux"),
+            titre_en(1, 3, "Trois"),
+            para_en(9, 100, "Un", false),
+            para_en(9, 140, "Deux", false),
+            para_en(9, 180, "Trois", false),
+        ];
+        let (blocs, _) = sommaire_cliquable(blocs, "");
+        assert_eq!(rendu_sommaire(&blocs)[3..], ["[Un](#t-un)", "[Deux](#t-deux)", "[Trois](#t-trois)"]);
+    }
+
+    #[test]
+    fn entree_avec_appel_de_note_reste_un_paragraphe() {
+        let mut blocs = vec![
+            titre_en(1, 3, "Un"),
+            titre_en(1, 4, "Deux"),
+            titre_en(1, 5, "Trois"),
+            titre_en(1, 6, "Quatre"),
+            para_en(2, 100, "Un", false),
+            para_en(2, 140, "Deux", false),
+            para_en(2, 180, "Trois", false),
+            para_en(2, 220, "Quatre", false),
+        ];
+        // Un lien ne peut pas contenir l'appel (lien imbriqué) : le texte reste tel quel.
+        if let Bloc::Paragraphe(p) = &mut blocs[7] {
+            p.segments.push(Segment::AppelNote { etiquette: "1-*".into(), marqueur: "*".into() });
+        }
+        let (blocs, _) = sommaire_cliquable(blocs, "");
+        assert_eq!(rendu_sommaire(&blocs)[4..], ["[Un](#t-un)", "[Deux](#t-deux)", "[Trois](#t-trois)", "Quatre*"]);
     }
 }

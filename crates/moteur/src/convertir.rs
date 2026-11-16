@@ -15,7 +15,7 @@ use crate::paragraphes::{Vocabulaire, mesurer_bloc, nettoyer_sauts, page_courte,
 use crate::pdf::DocumentPdf;
 use crate::points::{GenrePoint, PointAVerifier};
 use crate::reglages::{ReglagesSerie, SourceTitres};
-use crate::titres::{detecter_titres, placer_titre_livre};
+use crate::titres::{detecter_titres, placer_titre_livre, sommaire_cliquable};
 use crate::zones::{PageClassee, Retrait, Role, classer_lignes};
 
 #[derive(Debug, Serialize)]
@@ -140,8 +140,17 @@ pub fn convertir_livre(
     let (blocs, retraits_notes, pts) = notes_regroupees(blocs, &mut etiqueteuse, &vocab);
     retraits.extend(retraits_notes);
     points.extend(pts);
-    let sommaires: BTreeSet<u32> =
+    let mut sommaires: BTreeSet<u32> =
         points.iter().filter(|p| p.genre == GenrePoint::Sommaire).map(|p| p.ancre.page).collect();
+    // Après le regroupement des notes (qui peut retirer un titre « Notes ») : les
+    // identifiants visés par le sommaire sont ceux des titres définitifs. Ses pages
+    // ne se raccordent pas.
+    let (blocs, pts) = sommaire_cliquable(blocs, titre_livre);
+    for point in pts {
+        if sommaires.insert(point.ancre.page) {
+            points.push(point);
+        }
+    }
     let blocs = nettoyer_sauts(raccorder_pages(blocs, &vocab, &sommaires, &illisibles));
 
     let nb_notes = blocs.iter().filter(|b| matches!(b, Bloc::Note { .. })).count();
@@ -180,6 +189,7 @@ pub fn apercu_page(doc: &DocumentPdf, numero: u32, reglages: &ReglagesSerie) -> 
             .iter()
             .map(|b| match b {
                 Bloc::Paragraphe(p) => texte_des_segments(&p.segments),
+                Bloc::EntreeSommaire { segments, .. } => texte_des_segments(segments),
                 Bloc::Note { marqueur, segments, .. } => {
                     format!("{marqueur} {}", texte_des_segments(segments))
                 }
