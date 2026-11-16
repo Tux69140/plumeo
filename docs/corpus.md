@@ -11,9 +11,12 @@ EPUBCHECK_JAR=$PWD/vendor/epubcheck/epubcheck-5.4.0/epubcheck.jar \
 ```
 
 Sans `PLUMEO_CORPUS`, le test échoue avec un message explicite. L'EPUB de chaque livre est
-toujours généré (dossier temporaire) et ses contrôles de structure tournent toujours ; sans
-`EPUBCHECK_JAR`, seule la validation epubcheck est sautée, et la ligne de mesures du livre
-finit par « epubcheck non lancé » (« epubcheck lancé » sinon). Le test affiche une ligne de
+toujours généré (dossier temporaire) et ses contrôles de structure (liens, sommaire en
+`chap-002`) tournent toujours, avant epubcheck : les échecs de la structure et ceux
+d'epubcheck sont cumulés, et la comparaison des liens aux entrées est faite même si
+epubcheck échoue. Sans `EPUBCHECK_JAR`, seule la validation epubcheck est sautée. La ligne de
+mesures du livre finit par « epubcheck lancé » seulement si java a vraiment été appelé
+(« epubcheck non lancé » sinon, et aussi quand la génération de l'EPUB a échoué). Le test affiche une ligne de
 mesures par livre, puis ses échecs et ses dérogations.
 
 ## Fichiers
@@ -41,7 +44,8 @@ Communes à chaque livre :
 - un chapitre H1 « Table des matières » ou « Sommaire » à liens internes est
   `chap-002.xhtml`, juste après la page de titre.
 
-Propres à un livre (un champ absent ou `null` n'est pas vérifié) :
+Propres à un livre (un champ absent ou `null` n'est pas vérifié, sauf `sommaire_en_tete` et
+`moities`, booléens qui valent `false` par défaut) :
 
 | Champ | Sens |
 |---|---|
@@ -52,13 +56,13 @@ Propres à un livre (un champ absent ou `null` n'est pas vérifié) :
 | `n1_page_min` | aucun titre de niveau 1 avant cette page (titres du corps, pas d'un résumé) |
 | `n2` | nombre exact de titres de niveau 2 |
 | `entrees_sommaire` | nombre exact d'entrées de sommaire imprimé rendues cliquables (`[texte](#t-…)`) |
-| `sommaire_en_tete` | `true` : l'EPUB **doit** avoir un chapitre « Table des matières » ou « Sommaire » à liens, et c'est `chap-002.xhtml` (le contrôle ne passe plus à vide) ; absent ou `null` : le chapitre n'est contrôlé que s'il existe |
+| `sommaire_en_tete` | `true` : l'EPUB **doit** avoir un chapitre « Table des matières » ou « Sommaire » à liens, et c'est `chap-002.xhtml` (le contrôle ne passe plus à vide) ; `false` (par défaut, champ absent) : le chapitre n'est contrôlé que s'il existe |
 | `titres_contiennent` | textes qu'au moins un titre doit contenir |
 | `notes_pages` | `{ "page", "marqueur" }` : au moins une note ancrée sur la page (de ce marqueur) |
 | `notes_min` | nombre minimal de notes appariées |
 | `sans_notes_pages` | aucune note ancrée sur ces pages |
 | `absent_regex` | aucun paragraphe ne vérifie ces motifs (les notes, titres, sauts et entrées de sommaire ne sont pas des paragraphes) |
-| `moities` | ancres en `g` et en `d` (double page) |
+| `moities` | `true` : ancres en `g` et en `d` (double page) ; `false` par défaut |
 | `duree_max_s` | durée maximale de conversion (en `--release`) |
 
 Le test convertit chaque livre avec le titre que proposerait la CLI (métadonnées du PDF,
@@ -131,19 +135,20 @@ Aucun livre n'a eu besoin d'une autre série.
 
 Conversion en `--release`, epubcheck 5.4.0 : **les 9 EPUB sont valides**, le test passe.
 Mesures et durées du dernier passage (2026-11-16, finitions du lot « sommaires imprimés »,
-plan 2, sur 45ba3c7), après la vague finale des retours du contrôle visuel.
+plan 2, vague finale de la relecture finale, sur 1c8c9cb et ses corrections), après la vague
+finale des retours du contrôle visuel.
 
 | # | Attendu | Mesuré | Durée |
 |---|---|---|---|
-| 1 | signets, ~~73~~ ~~27~~ **17** n1 + 5 n2 dont « VISITE À PATMOS » (voir plus bas) ; 22 entrées de sommaire ; sommaire en `chap-002` ; ≥ 46 notes appariées | signets, 17 n1 + 5 n2 (« 1 VISITE À PATMOS »…) ; 22 entrées de sommaire ; 46 notes appariées ; médiane 569 car. | 0,2 s |
-| 2 | gras-majuscules, 10 n1 tous à partir de la p. 19, dont « LES 4 ÉLÉMENTS », « LA GENÈSE », « LUCIFER ET LE CHRIST » (attente réécrite, voir plus bas) ; 4 entrées de sommaire | gras-majuscules, les 10 ouvertures du corps (pp. 19, 26, 31, 32, 33, 36, 38, 40, 53, 56) ; 24 n2 ; 48 titres courants retirés ; résumé pp. 6-11 en sommaire, dont p. 11 aux 4 entrées liées ; médiane **32** (dérogation) | 0,2 s |
-| 3 | pas de titre courant ; note `*` p. 36 ; 5 à 60 n1 ; **11 entrées de sommaire** ; sommaire en `chap-002` ; aucune entrée collée à la suivante (`\d+\s+Si vous ne mourez pas`) | 0 titre courant ; 7 notes dont `*` p. 36 ; 11 entrées de sommaire liées (sommaire de la p. 205, « TABLE DES MATIÈRES » en `#`) ; 14 n1 (les titres illisibles, `# Corps m\--`, `# np`, `# s`…, restent des paragraphes avec le point « texte peu plausible pour un titre (OCR, schéma, code) : non retenu ») ; médiane 282 | 1,4 s |
-| 4 | signets, 22 titres (23 moins « SOMMAIRE », titre de service) ; 12 entrées de sommaire ; sommaire en `chap-002` | signets, 22 n1, 0 n2, 12 entrées de sommaire ; médiane 603 | 0,8 s |
+| 1 | signets, ~~73~~ ~~27~~ **17** n1 + 5 n2 dont « VISITE À PATMOS » (voir plus bas) ; 22 entrées de sommaire ; sommaire en `chap-002` ; ≥ 46 notes appariées | signets, 17 n1 + 5 n2 (« 1 VISITE À PATMOS »…) ; 22 entrées de sommaire ; 46 notes appariées ; médiane 569 car. | 0,3 s |
+| 2 | gras-majuscules, 10 n1 tous à partir de la p. 19, dont « LES 4 ÉLÉMENTS », « LA GENÈSE », « LUCIFER ET LE CHRIST » (attente réécrite, voir plus bas) ; 4 entrées de sommaire | gras-majuscules, les 10 ouvertures du corps (pp. 19, 26, 31, 32, 33, 36, 38, 40, 53, 56) ; 24 n2 ; 48 titres courants retirés ; résumé pp. 6-11 en sommaire, dont p. 11 aux 4 entrées liées ; médiane **32** (dérogation) | 0,3 s |
+| 3 | pas de titre courant ; note `*` p. 36 ; 5 à 60 n1 ; **11 entrées de sommaire** ; sommaire en `chap-002` ; aucune entrée collée à la suivante (`\d+\s+Si vous ne mourez pas`) | 0 titre courant ; 7 notes dont `*` p. 36 ; 11 entrées de sommaire liées (sommaire de la p. 205, « TABLE DES MATIÈRES » en `#`) ; 14 n1 (les titres illisibles, `# Corps m\--`, `# np`, `# s`…, restent des paragraphes avec le point « texte peu plausible pour un titre (OCR, schéma, code) : non retenu ») ; médiane 282 | 1,2 s |
+| 4 | signets, 22 titres (23 moins « SOMMAIRE », titre de service) ; 12 entrées de sommaire ; sommaire en `chap-002` | signets, 22 n1, 0 n2, 12 entrées de sommaire ; médiane 603 | 0,7 s |
 | 5 | signets, 4 n1 et 7 n2 ; 5 entrées de sommaire | signets, 4 n1, 7 n2, 5 entrées de sommaire ; médiane 456 | 0,2 s |
 | 6 | `g` et `d` ; pas de « 92 93 » ; ≥ 1 note appariée ; titre du livre en tête ; **14 n1** dont les titres complets des conférences I et X ; **14 entrées de sommaire** (voir ci-dessous) ; sommaire en `chap-002` ; aucun numéro romain seul en paragraphe, « I » exclu du motif (« *I* » en italique, p. 66d, légende de schéma) | `g` et `d` ; 0 pied résiduel ; 5 notes appariées ; titre du livre en tête ; 14 n1 (3 parties, 10 conférences, « Ouvrages de Rudolf Steiner… ») + « TABLE DES MATIÈRES » ; 14 entrées liées ; médiane 221 (voir ci-dessous) | 0,3 s |
-| 7 | se convertit ; EPUB valide | 28 n1 ; sommaire pp. 1-2 reconnu ; médiane 123 ; EPUB valide ; schéma p. 6 en texte (plan 6) | 0,8 s |
+| 7 | se convertit ; EPUB valide | 28 n1 ; sommaire pp. 1-2 reconnu ; médiane 123 ; EPUB valide ; schéma p. 6 en texte (plan 6) | 0,7 s |
 | 8 | 19 n1 « CHAPITRE » ; pas de note p. 145 | 19 n1 « CHAPITRE » ; aucune note ; médiane 183 | 0,5 s |
-| 9 | ≥ 8 n1 « CHAPITRE » ; pas de note p. 367 ; < 60 s | 9 n1 dont 8 « CHAPITRE … » (+ « PREMIER CHAPITRE ») ; aucune note ; médiane 258 | 2,0 s |
+| 9 | ≥ 8 n1 « CHAPITRE » ; pas de note p. 367 ; < 60 s | 9 n1 dont 8 « CHAPITRE … » (+ « PREMIER CHAPITRE ») ; aucune note ; médiane 258 | 1,8 s |
 
 ### Dérogations (attentes communes non tenables)
 
@@ -159,10 +164,27 @@ Les finitions (motif de numéro de page partagé, pages de sommaire par demi-pag
 recherche par entrée, numéros seuls absorbés, `sommaire_cliquable` restructurée avec les
 homonymes suivis par sommaire, titre de sommaire reconnu à l'identique par le moteur et par
 l'EPUB) laissent le Markdown des 9 livres et leurs EPUB identiques octet pour octet (hors
-date), sauf un écart : dans Connaissance, seule la p. 3d est désormais un sommaire, si bien que
-la fin de la p. 2d (« 11, rue Verdaine… ») se raccorde à la p. 3g (« Traduction faite… »)
-comme sur `main` ; aucun mot perdu, la médiane (221) et le point « Sommaire », désormais
-ancré en p. 3d, sont inchangés. Le tableau des résultats ne change donc que par les durées.
+date), sauf Connaissance. La relecture finale a vérifié les EPUB : seul celui de Connaissance
+diffère, par le raccord p. 2d → p. 3g. Seule la p. 3d y est désormais un sommaire, si bien
+que la fin de la p. 2d (« 11, rue Verdaine… ») se raccorde de nouveau au début de la p. 3g
+(« Traduction faite… »), comme sur `main` ; aucun mot n'est perdu et la médiane (221) ne
+change pas. Le point « Sommaire » de Connaissance est passé de la p. 3g à la p. 3d.
+
+Le tableau des résultats change par les durées, et aussi dans sa colonne « Attendu » : les
+lignes 1, 3, 4 et 6 y gagnent « sommaire en `chap-002` » (attente `sommaire_en_tete`).
+
+Vague finale (relecture finale du lot) : côté moteur, un sommaire réparti sur deux moitiés
+est désormais reconnu par la détection des titres comme par le sommaire cliquable. La
+(demi-)page qui précède directement une (demi-)page de sommaire (p. 3g avant p. 3d) en fait
+partie si elle porte au moins un paragraphe numéroté et si tous ses paragraphes sont courts
+(le titre « Table des matières » ou « Sommaire » est admis) ; la remontée s'arrête à la
+(demi-)page qui porte ce titre. Dans un livre sans signets, les entrées d'une p. 3g qui porte
+le titre et 2 ou 3 entrées (moins que les 4 numéros exigés d'une page de sommaire) sont donc
+cherchées comme titres de niveau 1. Après une entrée retrouvée, la recherche de la suivante
+part de sa (demi-)page, et non plus du début de sa page. Le Markdown, les points, les retraits
+et les EPUB des 9 livres sont identiques avant et après cette vague (hors date) : aucun livre
+du corpus n'a de telle (demi-)page (dans Connaissance, la p. 3d porte « TABLE DES MATIÈRES » :
+la remontée s'arrête là).
 
 ### Attentes ajoutées par le lot « sommaires imprimés » (n° 3 et 6)
 
