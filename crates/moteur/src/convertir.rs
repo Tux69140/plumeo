@@ -1,13 +1,15 @@
 //! Conversion d'un livre (ou d'une page) : toutes les étapes du moteur, de la
 //! lecture du PDF au Markdown ancré.
 
+use std::collections::BTreeSet;
+
 use serde::Serialize;
 
 use crate::blocs::{Bloc, Segment};
 use crate::double_page::couper_double_page;
 use crate::lignes::{Ligne, regrouper_en_lignes};
 use crate::markdown::ecrire_markdown;
-use crate::modele::{Ancre, ErreurMoteur, Moitie, Page};
+use crate::modele::{Ancre, DemiPage, ErreurMoteur, Moitie, Page};
 use crate::notes::{Etiqueteuse, notes_bas_de_page, notes_regroupees};
 use crate::paragraphes::{Vocabulaire, mesurer_bloc, nettoyer_sauts, page_courte, paragraphes_page, raccorder_pages};
 use crate::pdf::DocumentPdf;
@@ -140,23 +142,33 @@ pub fn convertir_livre(
     retraits.extend(retraits_notes);
     points.extend(pts);
     // Après le regroupement des notes (qui peut retirer un titre « Notes ») : les
-    // identifiants visés par le sommaire sont ceux des titres définitifs. Ses
-    // (demi-)pages, comme celles des sommaires conservés comme texte (`sommaires`), ne
-    // se raccordent pas ; l'autre moitié d'une page double, si elle n'en est pas une, se
-    // raccorde normalement. Un seul point par page : celui du sommaire cliquable
-    // remplace « conservée comme texte » d'une page déjà reconnue comme sommaire.
+    // identifiants visés par le sommaire sont ceux des titres définitifs.
     let (blocs, pts, moities_cliquables) = sommaire_cliquable(blocs, titre_livre);
-    sommaires.extend(moities_cliquables);
+    reunir_sommaires(&mut points, &mut sommaires, pts, moities_cliquables);
+    let blocs = nettoyer_sauts(raccorder_pages(blocs, &vocab, &sommaires, &illisibles));
+
+    let nb_notes = blocs.iter().filter(|b| matches!(b, Bloc::Note { .. })).count();
+    Ok(Conversion { markdown: ecrire_markdown(&blocs), retraits, points, source_titres, nb_pages, nb_notes })
+}
+
+/// Ajoute aux points et aux (demi-)pages de sommaire de `detecter_titres` (`points`,
+/// `sommaires`) ceux du sommaire cliquable (`pts`, `moities`). Ces (demi-)pages ne se
+/// raccordent pas (`raccorder_pages`) ; l'autre moitié d'une page double, si elle n'en
+/// est pas une, se raccorde normalement. Un seul point par page : celui du sommaire
+/// cliquable remplace « conservée comme texte » d'une page déjà reconnue comme sommaire.
+fn reunir_sommaires(
+    points: &mut Vec<PointAVerifier>,
+    sommaires: &mut BTreeSet<DemiPage>,
+    pts: Vec<PointAVerifier>,
+    moities: BTreeSet<DemiPage>,
+) {
+    sommaires.extend(moities);
     for point in pts {
         match points.iter_mut().find(|p| p.genre == GenrePoint::Sommaire && p.ancre.page == point.ancre.page) {
             Some(ancien) => *ancien = point,
             None => points.push(point),
         }
     }
-    let blocs = nettoyer_sauts(raccorder_pages(blocs, &vocab, &sommaires, &illisibles));
-
-    let nb_notes = blocs.iter().filter(|b| matches!(b, Bloc::Note { .. })).count();
-    Ok(Conversion { markdown: ecrire_markdown(&blocs), retraits, points, source_titres, nb_pages, nb_notes })
 }
 
 fn texte_des_segments(segments: &[Segment]) -> String {
@@ -210,5 +222,56 @@ fn point_page_sans_texte(page: &Page) -> PointAVerifier {
         ancre: ancre_entiere(page),
         genre: GenrePoint::PageSansTexte,
         message: format!("la page {} ne contient aucun texte", page.numero),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+    use crate::blocs::Paragraphe;
+
+    fn para(page: u32, moitie: Moitie, texte: &str) -> Bloc {
+        Bloc::Paragraphe(Paragraphe {
+            segments: vec![Segment::Texte { texte: texte.into(), gras: false, italique: false }],
+            ancre: Ancre { page, moitie, rect: [100, 100, 900, 130] },
+            taille: 12.0,
+            tout_gras: false,
+            nb_lignes: 1,
+        })
+    }
+
+    fn point(page: u32, moitie: Moitie, message: &str) -> PointAVerifier {
+        PointAVerifier {
+            ancre: Ancre { page, moitie, rect: [100, 100, 900, 130] },
+            genre: GenrePoint::Sommaire,
+            message: message.into(),
+        }
+    }
+
+    #[test]
+    fn deux_moities_de_sommaire_un_seul_point_aucun_raccord() {
+        // `detecter_titres` a vu un sommaire en p3d ; le sommaire cliquable couvre p3g et p3d.
+        let mut points = vec![point(3, Moitie::Droite, "conservée comme texte")];
+        let mut sommaires = BTreeSet::from([(3, Moitie::Droite)]);
+        let cliquables = BTreeSet::from([(3, Moitie::Gauche), (3, Moitie::Droite)]);
+        reunir_sommaires(&mut points, &mut sommaires, vec![point(3, Moitie::Gauche, "cliquable")], cliquables);
+        assert_eq!(points.len(), 1);
+        assert_eq!((points[0].ancre.moitie, points[0].message.as_str()), (Moitie::Gauche, "cliquable"));
+        assert_eq!(sommaires, BTreeSet::from([(3, Moitie::Gauche), (3, Moitie::Droite)]));
+        // Aucune des deux moitiés ne se raccorde, ni entre elles, ni à leurs voisines.
+        let blocs = || {
+            vec![
+                para(2, Moitie::Droite, "fin de p2d"),
+                para(3, Moitie::Gauche, "entrée de p3g"),
+                para(3, Moitie::Droite, "entrée de p3d"),
+                para(4, Moitie::Gauche, "début de p4g"),
+            ]
+        };
+        let vocab = Vocabulaire::default();
+        assert_eq!(raccorder_pages(blocs(), &vocab, &sommaires, &HashSet::new()).len(), 4);
+        // Témoin : sans les sommaires, tout se raccorde.
+        assert_eq!(raccorder_pages(blocs(), &vocab, &BTreeSet::new(), &HashSet::new()).len(), 1);
     }
 }

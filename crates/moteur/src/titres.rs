@@ -374,9 +374,8 @@ fn preparer_signets(signets: &[Signet]) -> Vec<SignetCherche> {
 fn numero_seul_avant(blocs: &[Bloc], debut: usize, utilises: &HashSet<usize>) -> Option<String> {
     let i = debut.checked_sub(1).filter(|i| !utilises.contains(i))?;
     let Bloc::Paragraphe(p) = &blocs[i] else { return None };
-    let titre = blocs[debut].ancre();
     let texte = p.texte_brut().trim().to_string();
-    ((p.ancre.page, p.ancre.moitie) == (titre.page, titre.moitie) && NUMERO_SEUL.is_match(&texte)).then_some(texte)
+    (p.ancre.demi_page() == blocs[debut].ancre().demi_page() && NUMERO_SEUL.is_match(&texte)).then_some(texte)
 }
 
 /// Titres issus des signets. Retourne les blocs et les points de signets introuvables.
@@ -979,7 +978,7 @@ fn etendue_entree(textes: &[&str]) -> usize {
 /// `debut` n'est pas un tel paragraphe. Même découpage pour les titres tirés du sommaire
 /// (`entrees_du_sommaire`) et pour le sommaire cliquable (`sommaire_cliquable`).
 fn paragraphes_d_entree(blocs: &[Bloc], debut: usize) -> Vec<String> {
-    let lieu = |b: &Bloc| (b.ancre().page, b.ancre().moitie);
+    let lieu = |b: &Bloc| b.ancre().demi_page();
     let textes: Vec<String> = blocs[debut..]
         .iter()
         .take(MAX_PARAGRAPHES_ENTREE)
@@ -1283,7 +1282,7 @@ pub fn placer_titre_livre(mut blocs: Vec<Bloc>, titre_livre: &str) -> Vec<Bloc> 
     let (position, texte, ancre) = match trouve {
         Some((debut, fin, texte)) => {
             let ancre = blocs[debut].ancre();
-            let meme_page = |b: &Bloc| (b.ancre().page, b.ancre().moitie) == (ancre.page, ancre.moitie);
+            let meme_page = |b: &Bloc| b.ancre().demi_page() == ancre.demi_page();
             let tete = blocs[..debut].iter().rposition(|b| !meme_page(b)).map_or(0, |i| i + 1);
             blocs.drain(debut..fin);
             // Le titre déplacé séparait deux (demi-)pages : un saut prend sa place, sans quoi
@@ -1293,7 +1292,7 @@ pub fn placer_titre_livre(mut blocs: Vec<Bloc>, titre_livre: &str) -> Vec<Bloc> 
                 && let (Some(avant), Some(apres)) = (debut.checked_sub(1).map(|i| &blocs[i]), blocs.get(debut))
                 && separe(avant)
                 && separe(apres)
-                && (avant.ancre().page, avant.ancre().moitie) != (apres.ancre().page, apres.ancre().moitie)
+                && avant.ancre().demi_page() != apres.ancre().demi_page()
             {
                 blocs.insert(debut, Bloc::Saut { ancre: apres.ancre() });
             }
@@ -1354,10 +1353,11 @@ pub fn sommaire_cliquable(
         Bloc::Titre { texte, .. } => !titre_livre.is_empty() && normaliser_titre(texte) == titre_livre,
         _ => false,
     });
-    // Texte normalisé → (indice, page) des titres qui le portent, dans l'ordre du livre ;
-    // `sans_numero` : de même pour le texte des titres numérotés, sans le numéro en tête.
-    let mut titres: HashMap<String, Vec<(usize, u32)>> = HashMap::new();
-    let mut sans_numero: HashMap<String, Vec<(usize, u32)>> = HashMap::new();
+    // Texte normalisé → (indice, (demi-)page) des titres qui le portent, dans l'ordre du
+    // livre ; `sans_numero` : de même pour le texte des titres numérotés, sans le numéro
+    // en tête.
+    let mut titres: HashMap<String, Vec<(usize, DemiPage)>> = HashMap::new();
+    let mut sans_numero: HashMap<String, Vec<(usize, DemiPage)>> = HashMap::new();
     for (i, bloc) in blocs.iter().enumerate() {
         if let Bloc::Titre { texte, ancre, .. } = bloc
             && Some(i) != livre
@@ -1365,26 +1365,26 @@ pub fn sommaire_cliquable(
             let texte = texte.trim();
             let norm = normaliser_titre(texte);
             if !norm.is_empty() {
-                titres.entry(norm).or_default().push((i, ancre.page));
+                titres.entry(norm).or_default().push((i, ancre.demi_page()));
             }
             let court = NUMERO_EN_TETE.replace(texte, "");
             let norm = normaliser_titre(&court);
             if court.len() < texte.len() && !norm.is_empty() {
-                sans_numero.entry(norm).or_default().push((i, ancre.page));
+                sans_numero.entry(norm).or_default().push((i, ancre.demi_page()));
             }
         }
     }
-    // Titres (hors de la page `page`) que vise une entrée faite des paragraphes `textes` :
-    // son texte brut (entrée d'un seul paragraphe), puis son texte joint ; le texte entier
-    // des titres d'abord, puis leur texte sans numéro en tête. Vide si aucun.
-    let vises = |textes: &[&str], page: u32| -> Vec<(usize, u32)> {
+    // Titres (hors de la (demi-)page `demi_page`) que vise une entrée faite des paragraphes
+    // `textes` : son texte brut (entrée d'un seul paragraphe), puis son texte joint ; le
+    // texte entier des titres d'abord, puis leur texte sans numéro en tête. Vide si aucun.
+    let vises = |textes: &[&str], demi_page: DemiPage| -> Vec<(usize, DemiPage)> {
         let joint = texte_entree(textes);
         let brut = if textes.len() == 1 { Some(textes[0].trim()) } else { None };
         for t in brut.into_iter().chain([joint.as_str()]) {
             let norm = normaliser_titre(t);
             for table in [&titres, &sans_numero] {
-                let autres: Vec<(usize, u32)> =
-                    table.get(&norm).into_iter().flatten().copied().filter(|(_, p)| *p != page).collect();
+                let autres: Vec<(usize, DemiPage)> =
+                    table.get(&norm).into_iter().flatten().copied().filter(|(_, d)| *d != demi_page).collect();
                 if !autres.is_empty() {
                     return autres;
                 }
@@ -1397,7 +1397,7 @@ pub fn sommaire_cliquable(
     // (indice du premier paragraphe, nombre de paragraphes, titres visés). Une entrée ne
     // déborde jamais de sa (demi-)page.
     let mut rang: HashMap<DemiPage, usize> = HashMap::new();
-    let mut moities: Vec<(DemiPage, Vec<usize>, Vec<(usize, usize, Vec<(usize, u32)>)>)> = Vec::new();
+    let mut moities: Vec<(DemiPage, Vec<usize>, Vec<(usize, usize, Vec<(usize, DemiPage)>)>)> = Vec::new();
     for (i, bloc) in blocs.iter().enumerate() {
         if let Bloc::Paragraphe(p) = bloc {
             let r = *rang.entry(p.ancre.demi_page()).or_insert_with(|| {
@@ -1407,21 +1407,20 @@ pub fn sommaire_cliquable(
             moities[r].1.push(i);
         }
     }
-    for (demi_page, paragraphes, entrees) in &mut moities {
-        let page = &demi_page.0;
+    for &mut (demi_page, ref paragraphes, ref mut entrees) in &mut moities {
         let mut k = 0;
         while k < paragraphes.len() {
             // Paragraphes consécutifs de la (demi-)page, sans appel de note (un lien ne
             // peut pas en contenir), à partir du k-ième.
             let suite = paragraphes_d_entree(&blocs, paragraphes[k]);
             let textes: Vec<&str> = suite.iter().map(String::as_str).collect();
-            // La plus longue qui vise un titre après la page, à défaut la plus longue qui
-            // en vise un.
-            let essais: Vec<(usize, Vec<(usize, u32)>)> =
-                (1..=textes.len()).rev().map(|n| (n, vises(&textes[..n], *page))).collect();
+            // La plus longue qui vise un titre après la (demi-)page, à défaut la plus
+            // longue qui en vise un.
+            let essais: Vec<(usize, Vec<(usize, DemiPage)>)> =
+                (1..=textes.len()).rev().map(|n| (n, vises(&textes[..n], demi_page))).collect();
             let trouve = essais
                 .iter()
-                .find(|(_, titres)| titres.iter().any(|(_, p)| p > page))
+                .find(|(_, titres)| titres.iter().any(|(_, d)| *d > demi_page))
                 .or_else(|| essais.iter().find(|(_, titres)| !titres.is_empty()))
                 .cloned();
             match trouve {
@@ -1444,11 +1443,22 @@ pub fn sommaire_cliquable(
         sommaire[r] = (entrees.len() >= MIN_TITRES_NIVEAU && couverts * 2 >= paragraphes.len())
             || (suite && couverts == paragraphes.len());
     }
+    // La (demi-)page de rang `r` s'ouvre-t-elle sur le titre du sommaire (« Table des
+    // matières » ou « Sommaire » avant sa première entrée) ?
+    let ouvre_le_sommaire = |r: usize| {
+        let (_, paragraphes, entrees) = &moities[r];
+        entrees.first().is_some_and(|&(premiere, ..)| {
+            paragraphes.iter().any(|&j| j < premiere && titre_de_sommaire(&blocs[j]))
+        })
+    };
     // Pendant de la suite : la (demi-)page qui précède directement une (demi-)page de
     // sommaire, faite d'entrées (et d'un éventuel titre du sommaire avant la première).
+    // La chaîne remonte de proche en proche, mais jamais au-delà d'une (demi-)page qui
+    // s'ouvre sur le titre du sommaire : ce qui précède le titre n'en fait pas partie.
     for r in (0..moities.len().saturating_sub(1)).rev() {
         let (_, paragraphes, entrees) = &moities[r];
-        if sommaire[r] || !sommaire[r + 1] || !contigues(r, r + 1) || entrees.is_empty() {
+        if sommaire[r] || !sommaire[r + 1] || !contigues(r, r + 1) || entrees.is_empty() || ouvre_le_sommaire(r + 1)
+        {
             continue;
         }
         let couverts: HashSet<usize> = entrees.iter().flat_map(|&(i, n, _)| i..i + n).collect();
@@ -1465,19 +1475,19 @@ pub fn sommaire_cliquable(
     let pages: BTreeSet<DemiPage> = moities.iter().zip(&sommaire).filter(|(_, s)| **s).map(|(m, _)| m.0).collect();
     // Entrées des (demi-)pages de sommaire, dans l'ordre du livre : premier paragraphe →
     // (nombre de paragraphes, titre visé).
-    let mut a_viser: Vec<(usize, usize, u32, &Vec<(usize, u32)>)> = moities
+    let mut a_viser: Vec<(usize, usize, DemiPage, &Vec<(usize, DemiPage)>)> = moities
         .iter()
         .zip(&sommaire)
         .filter(|(_, s)| **s)
-        .flat_map(|(((page, _), _, entrees), _)| entrees.iter().map(|(i, n, titres)| (*i, *n, *page, titres)))
+        .flat_map(|((demi_page, _, entrees), _)| entrees.iter().map(|(i, n, titres)| (*i, *n, *demi_page, titres)))
         .collect();
     a_viser.sort_by_key(|(i, ..)| *i);
     let mut deja_vises: HashSet<usize> = HashSet::new();
     let mut entrees: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
-    for (i, n, page, titres) in a_viser {
-        let libres: Vec<&(usize, u32)> = titres.iter().filter(|(t, _)| !deja_vises.contains(t)).collect();
+    for (i, n, demi_page, titres) in a_viser {
+        let libres: Vec<&(usize, DemiPage)> = titres.iter().filter(|(t, _)| !deja_vises.contains(t)).collect();
         let parmi = if libres.is_empty() { titres.iter().collect() } else { libres };
-        let (titre, _) = parmi.iter().find(|(_, p)| *p > page).or_else(|| parmi.first()).expect("titre visé");
+        let (titre, _) = parmi.iter().find(|(_, d)| *d > demi_page).or_else(|| parmi.first()).expect("titre visé");
         deja_vises.insert(*titre);
         entrees.insert(i, (n, *titre));
     }
@@ -3413,12 +3423,12 @@ mod tests {
         // Un seul point « sommaire », ancré à la moitié de sommaire.
         let sommaires: Vec<Ancre> =
             points.iter().filter(|p| p.genre == GenrePoint::Sommaire).map(|p| p.ancre).collect();
-        assert_eq!(sommaires.iter().map(|a| (a.page, a.moitie)).collect::<Vec<_>>(), [(3, Moitie::Droite)]);
+        assert_eq!(sommaires.iter().map(Ancre::demi_page).collect::<Vec<_>>(), [(3, Moitie::Droite)]);
     }
 
-    #[test]
-    fn recherche_apres_un_sommaire_fini_sur_une_moitie_gauche() {
-        // Sommaire en p3g, premier titre du corps en p3d : la recherche commence en p3d.
+    /// Livre de 20 pages au sommaire imprimé (`SOMMAIRE_IMPRIME`) en p3g ; le premier titre
+    /// du corps (« I / LES BASES / DE LA SUITE (I) ») en p3d, les autres plus loin.
+    fn livre_au_sommaire_en_p3g() -> Vec<Bloc> {
         let titres_du_corps: Vec<(u32, &[&str])> = TITRES_DU_CORPS[1..].to_vec();
         let mut blocs = livre_a_sommaire(3, &SOMMAIRE_IMPRIME, &titres_du_corps);
         for bloc in blocs.iter_mut() {
@@ -3440,28 +3450,43 @@ mod tests {
                 Bloc::Paragraphe(p)
             });
         blocs.splice(apres..apres, droite);
-        let (blocs, _, _, _, _, _) = detecter_titres(blocs, &[], 20, SourceTitres::Auto);
+        blocs
+    }
+
+    #[test]
+    fn recherche_apres_un_sommaire_fini_sur_une_moitie_gauche() {
+        // Sommaire en p3g, premier titre du corps en p3d : la recherche commence en p3d.
+        let (blocs, _, _, _, _, _) = detecter_titres(livre_au_sommaire_en_p3g(), &[], 20, SourceTitres::Auto);
         let premier = blocs.iter().find(|b| matches!(b, Bloc::Titre { .. })).expect("un titre");
         assert_eq!(texte_de(premier), "# I. LES BASES DE LA SUITE (I)");
-        assert_eq!((premier.ancre().page, premier.ancre().moitie), (3, Moitie::Droite));
+        assert_eq!(premier.ancre().demi_page(), (3, Moitie::Droite));
         assert_eq!(titres(&blocs).len(), 4);
     }
 
-    /// Livre au sommaire réparti sur la page 3 double : `gauche` en p3g, puis 4 entrées en
-    /// p3d ; six chapitres de la page 5 à la page 15.
-    fn livre_au_sommaire_sur_deux_moities(gauche: &[&str]) -> Vec<Bloc> {
-        const CHAPITRES: [&str; 6] = ["Un", "Deux", "Trois", "Quatre", "Cinq", "Six"];
+    #[test]
+    fn entree_d_un_sommaire_en_p3g_liee_au_titre_de_p3d() {
+        // Même livre, puis le sommaire cliquable : la p3g est un sommaire, et son entrée
+        // « Les bases de la suite (I) » vise le titre de la p3d (même page, autre moitié).
+        let (blocs, _, _, _, _, _) = detecter_titres(livre_au_sommaire_en_p3g(), &[], 20, SourceTitres::Auto);
+        let (blocs, _, moities) = sommaire_cliquable(blocs, "");
+        assert_eq!(moities, BTreeSet::from([(3, Moitie::Gauche)]));
+        let rendu = rendu_sommaire(&blocs);
+        assert!(rendu.contains(&lien("Les bases de la suite (I)", "I. LES BASES DE LA SUITE (I)")), "{rendu:?}");
+    }
+
+    /// Chapitres « Un » à « Huit », aux pages 5, 7… 19, que visent les entrées « Un 5 »…
+    const CHAPITRES: [&str; 8] = ["Un", "Deux", "Trois", "Quatre", "Cinq", "Six", "Sept", "Huit"];
+
+    /// Livre au sommaire réparti sur les (demi-)pages données, chacune avec ses lignes,
+    /// puis les `CHAPITRES` (titre et texte courant).
+    fn livre_au_sommaire_reparti(moities: &[(u32, Moitie, &[&str])]) -> Vec<Bloc> {
         let mut blocs = vec![titre_en(1, 1, "Mon livre")];
-        let mut ajouter = |moitie: Moitie, k: usize, texte: &str| {
-            let Bloc::Paragraphe(mut p) = para_en(3, 100 + 40 * k as u16, texte, false) else { unreachable!() };
-            p.ancre.moitie = moitie;
-            blocs.push(Bloc::Paragraphe(p));
-        };
-        for (k, texte) in gauche.iter().enumerate() {
-            ajouter(Moitie::Gauche, k, texte);
-        }
-        for (k, chapitre) in CHAPITRES[2..].iter().enumerate() {
-            ajouter(Moitie::Droite, k, &format!("{chapitre} {}", 9 + 2 * k));
+        for (page, moitie, lignes) in moities {
+            for (k, texte) in lignes.iter().enumerate() {
+                let Bloc::Paragraphe(mut p) = para_en(*page, 100 + 40 * k as u16, texte, false) else { unreachable!() };
+                p.ancre.moitie = *moitie;
+                blocs.push(Bloc::Paragraphe(p));
+            }
         }
         for (k, chapitre) in CHAPITRES.iter().enumerate() {
             let page = 5 + 2 * k as u32;
@@ -3469,6 +3494,74 @@ mod tests {
             blocs.push(corps(page, &texte_long()));
         }
         blocs
+    }
+
+    /// Livre au sommaire réparti sur la page 3 double : `gauche` en p3g, puis 4 entrées en
+    /// p3d (« Trois 9 » à « Six 15 »).
+    fn livre_au_sommaire_sur_deux_moities(gauche: &[&str]) -> Vec<Bloc> {
+        livre_au_sommaire_reparti(&[
+            (3, Moitie::Gauche, gauche),
+            (3, Moitie::Droite, &["Trois 9", "Quatre 11", "Cinq 13", "Six 15"]),
+        ])
+    }
+
+    #[test]
+    fn enchainement_a_rebours_arrete_au_titre_du_sommaire() {
+        // p2d : entrées seules ; p3g : titre et entrées ; p3d : entrées. La chaîne remonte
+        // jusqu'à la p3g, qui porte le titre, et s'y arrête : la p2d n'est pas avalée.
+        let livre = livre_au_sommaire_reparti(&[
+            (2, Moitie::Droite, &["Un 5", "Deux 7"]),
+            (3, Moitie::Gauche, &["Table des matières", "Trois 9", "Quatre 11"]),
+            (3, Moitie::Droite, &["Cinq 13", "Six 15", "Sept 17", "Huit 19"]),
+        ]);
+        let (blocs, _, moities) = sommaire_cliquable(livre, "Mon livre");
+        assert_eq!(moities, BTreeSet::from([(3, Moitie::Gauche), (3, Moitie::Droite)]));
+        let rendu = rendu_sommaire(&blocs);
+        assert_eq!(rendu[1..3], ["Un 5", "Deux 7"]);
+        assert_eq!(rendu[3], "# Table des matières");
+        assert_eq!(
+            rendu[4..10],
+            ["Trois 9", "Quatre 11", "Cinq 13", "Six 15", "Sept 17", "Huit 19"]
+                .map(|t| lien(t, t.split(' ').next().unwrap()))
+        );
+        // Sans titre, la chaîne remonte d'entrées en entrées.
+        let livre = livre_au_sommaire_reparti(&[
+            (2, Moitie::Droite, &["Un 5", "Deux 7"]),
+            (3, Moitie::Gauche, &["Trois 9", "Quatre 11"]),
+            (3, Moitie::Droite, &["Cinq 13", "Six 15", "Sept 17", "Huit 19"]),
+        ]);
+        let (_, _, moities) = sommaire_cliquable(livre, "Mon livre");
+        assert_eq!(moities, BTreeSet::from([(2, Moitie::Droite), (3, Moitie::Gauche), (3, Moitie::Droite)]));
+    }
+
+    #[test]
+    fn resume_sans_numeros_sur_une_page_double() {
+        // Résumé sur les deux moitiés de la page 6 : il les couvre toutes les deux.
+        let g = |moitie, texte: &str| {
+            let Bloc::Paragraphe(mut p) = para(6, texte, 15.0, true, 1) else { unreachable!() };
+            p.ancre.moitie = moitie;
+            Bloc::Paragraphe(p)
+        };
+        let mut blocs = vec![
+            corps(5, &texte_long()),
+            g(Moitie::Gauche, "RÉSUMÉ"),
+            g(Moitie::Gauche, "CHAPITRE 1:"),
+            g(Moitie::Gauche, "LES ÉLÉMENTS"),
+            g(Moitie::Droite, "CHAPITRE 2:"),
+            g(Moitie::Droite, "LA GENÈSE"),
+            g(Moitie::Droite, "CHAPITRE 3:"),
+            g(Moitie::Droite, "LUCIFER ET LE CHRIST"),
+        ];
+        for (page, titre) in [(19, "LES ÉLÉMENTS"), (25, "LA GENÈSE"), (30, "LUCIFER ET LE CHRIST")] {
+            blocs.push(para(page, titre, 15.0, true, 1));
+            blocs.push(corps(page, &texte_long()));
+        }
+        let (pages, pseudo) = resume_sans_numeros(&blocs, &BTreeSet::new());
+        assert_eq!(pages, BTreeSet::from([(6, Moitie::Gauche), (6, Moitie::Droite)]));
+        assert_eq!(pseudo.iter().map(|s| s.page).collect::<Vec<_>>(), [19, 25, 30]);
+        // Une moitié de sommaire sur la page l'exclut du résumé (critère par page).
+        let (pages, _) = resume_sans_numeros(&blocs, &BTreeSet::from([(6, Moitie::Droite)]));
+        assert!(pages.is_empty());
     }
 
     #[test]
@@ -3485,7 +3578,7 @@ mod tests {
                 .map(|t| lien(t, t.split(' ').next().unwrap()))
         );
         // Un point par page, ancré à la première moitié de sommaire.
-        assert_eq!(points.iter().map(|p| (p.ancre.page, p.ancre.moitie)).collect::<Vec<_>>(), [(3, Moitie::Gauche)]);
+        assert_eq!(points.iter().map(|p| p.ancre.demi_page()).collect::<Vec<_>>(), [(3, Moitie::Gauche)]);
     }
 
     #[test]
@@ -3496,6 +3589,6 @@ mod tests {
         let rendu = rendu_sommaire(&blocs);
         assert_eq!(rendu[1..4], ["Imprimé en Suisse", "Un 5", "Deux 7"]);
         assert_eq!(rendu[4], lien("Trois 9", "Trois"));
-        assert_eq!(points.iter().map(|p| (p.ancre.page, p.ancre.moitie)).collect::<Vec<_>>(), [(3, Moitie::Droite)]);
+        assert_eq!(points.iter().map(|p| p.ancre.demi_page()).collect::<Vec<_>>(), [(3, Moitie::Droite)]);
     }
 }

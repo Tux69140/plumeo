@@ -14,8 +14,10 @@ pub struct Rect {
     pub y1: f32,
 }
 
-/// Moitié d'une page. L'ordre suit la lecture : gauche avant droite ; une page entière
-/// est seule sur sa page.
+/// Moitié d'une page. L'ordre des variantes est voulu, et le code s'y fie : il suit la
+/// lecture (gauche avant droite), et `Entiere`, seule sur sa page, vient en premier, si
+/// bien que `(page, Moitie::Entiere)` est le début de la page (`demi_page_suivante`,
+/// recherches « à partir de » une (demi-)page). Ne pas réordonner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Moitie {
     Entiere,
@@ -134,4 +136,26 @@ pub enum ErreurMoteur {
     Page(u32, String),
     #[error("réglages invalides : {0}")]
     Reglages(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn demi_pages_dans_l_ordre_de_lecture() {
+        // Ordre voulu des moitiés : une page entière, puis gauche, puis droite.
+        assert!(Moitie::Entiere < Moitie::Gauche && Moitie::Gauche < Moitie::Droite);
+        // (page, Entiere) ouvre la page : il précède toutes ses moitiés et suit la page d'avant.
+        assert!((3, Moitie::Entiere) < (3, Moitie::Gauche));
+        assert!((2, Moitie::Droite) < (3, Moitie::Entiere));
+        let mut lecture = vec![(4, Moitie::Gauche), (3, Moitie::Droite), (3, Moitie::Gauche), (2, Moitie::Entiere)];
+        lecture.sort();
+        assert_eq!(lecture, [(2, Moitie::Entiere), (3, Moitie::Gauche), (3, Moitie::Droite), (4, Moitie::Gauche)]);
+        assert_eq!(demi_page_suivante((3, Moitie::Gauche)), (3, Moitie::Droite));
+        assert_eq!(demi_page_suivante((3, Moitie::Droite)), (4, Moitie::Entiere));
+        assert_eq!(demi_page_suivante((3, Moitie::Entiere)), (4, Moitie::Entiere));
+        // Le début de la page suivante précède ses deux moitiés.
+        assert!(demi_page_suivante((3, Moitie::Droite)) < (4, Moitie::Gauche));
+    }
 }
