@@ -20,7 +20,7 @@ jalon 1 est déjà détaillé et en cours.
 
 | Jalon | Livrable | Ce qu'on peut faire à la fin | Dépend de | État |
 |---|---|---|---|---|
-| **1. Moteur et EPUB** | Bibliothèques Rust + `plumeo-cli` | Convertir un PDF à couche texte en EPUB, en ligne de commande, avec un fichier de réglages de série | — | **en cours** (tâches 1 à 6 sur 10 faites) |
+| **1. Moteur et EPUB** | Bibliothèques Rust + `plumeo-cli` | Convertir un PDF à couche texte en EPUB, en ligne de commande, avec un fichier de réglages de série | — | **terminé** (contrôle visuel Foliate à faire par le porteur) |
 | **2. Analyse à l'import** | Diagnostic, empreinte, séries, contrôle d'appartenance + `plumeo-cli analyser` | Analyser un dossier : scans, doubles pages, schémas, texte douteux par page, séries proposées, fiche d'appartenance | 1 | à faire |
 | **3. Application** | Appli Tauri : stockage, import, réglage de série, conversion en arrière-plan | Tout faire depuis l'appli, sauf la révision : importer, ranger, régler visuellement, convertir, obtenir l'EPUB | 1, 2 | à faire |
 | **4. Révision** | Écran PDF / Markdown synchronisé, points à vérifier, validation | Vérifier et corriger chaque livre côte à côte avant de produire l'EPUB | 3 | à faire |
@@ -75,10 +75,10 @@ Ordre conseillé : 1 → 2 → 3 → 4 → 5 → 6.
 | 1.4 | Lignes → paragraphes : fin de paragraphe (blanc > 15 %), alinéas, césures, U+00AD, italique/gras/exposants, raccord entre pages | `blocs`, `paragraphes` | ✅ |
 | 1.5 | Titres en cascade (signets → gras+MAJ → taille), sommaire d'origine, titres courants suspects | `titres`, `points` | ✅ |
 | 1.6 | Notes de bas de page et notes regroupées sous « Notes », appariement, orphelines | `notes` | ✅ |
-| 1.7 | Markdown interne ancré (`<!-- @p12 … -->`), échappement, conversion d'un livre entier, aperçu d'une page | `markdown`, `convertir` | à faire |
-| 1.8 | EPUB 3 : un fichier par chapitre, nav, notes `noteref`/`footnote` avec retour ↩, couverture, epubcheck | crate `plumeo-epub` | à faire |
-| 1.9 | Titre et auteur proposés depuis le nom de fichier, nom de sortie sûr, `plumeo-cli convertir` / `page` | crate `plumeo-cli` | à faire |
-| 1.10 | Réglages des séries du corpus, non-régression sur les 9 PDF, contrôle visuel dans Foliate | `tests/corpus/`, `docs/corpus.md` | à faire |
+| 1.7 | Markdown interne ancré (`<!-- @p12 … -->`), échappement, conversion d'un livre entier, aperçu d'une page | `markdown`, `convertir` | ✅ |
+| 1.8 | EPUB 3 : un fichier par chapitre, nav, notes `noteref`/`footnote` avec retour ↩, couverture, epubcheck | crate `plumeo-epub` | ✅ |
+| 1.9 | Titre et auteur proposés depuis le nom de fichier, nom de sortie sûr, `plumeo-cli convertir` / `page` | crate `plumeo-cli` | ✅ |
+| 1.10 | Réglages des séries du corpus, non-régression sur les 9 PDF, contrôle visuel dans Foliate | `tests/corpus/`, `docs/corpus.md` | ✅ (Foliate : porteur) |
 
 **Livrable :**
 ```
@@ -502,3 +502,4 @@ Le défilement proportionnel de Lumosphère ne suffit pas.
 |---|---|---|
 | 2026-11-08 | — | Cadrage validé et commité |
 | 2026-11-10 | 1 | Plan détaillé écrit. Tâches 1.1 à 1.6 codées, relues et commitées sur `plan-1-moteur` (non poussé) |
+| 2026-11-16 | 1 | Tâches 1.7 à 1.10 faites ; relecture finale et correctifs (notes de fin de livre liées entre chapitres, résumé sans numéros en temps linéaire, OPF/nav validés). 135 tests, corpus 9/9 sans erreur epubcheck. Fusionné dans `main` et poussé. Reste : contrôle visuel Foliate des n° 1, 3 et 6 |
