@@ -86,7 +86,7 @@ Conversion en `--release`, epubcheck 5.4.0 : **les 9 EPUB sont valides**, le tes
 
 | # | Attendu | Mesuré | Durée |
 |---|---|---|---|
-| 1 | signets, ~~73~~ ~~27~~ **17** n1 + 5 n2 dont « VISITE À PATMOS » (voir plus bas) | signets, 17 n1 + 5 n2 (« 1 VISITE À PATMOS »…) ; médiane 419 car. | 0,3 s |
+| 1 | signets, ~~73~~ ~~27~~ **17** n1 + 5 n2 dont « VISITE À PATMOS » (voir plus bas) ; ≥ 46 notes appariées | signets, 17 n1 + 5 n2 (« 1 VISITE À PATMOS »…) ; 46 notes appariées ; médiane 419 car. | 0,3 s |
 | 2 | gras-majuscules, 10 n1 tous à partir de la p. 19, dont « LES 4 ÉLÉMENTS », « LA GENÈSE », « LUCIFER ET LE CHRIST » (attente réécrite, voir plus bas) | gras-majuscules, les 10 ouvertures du corps (pp. 19, 26, 31, 32, 33, 36, 38, 40, 53, 56) ; 29 n2 ; 48 titres courants retirés ; résumé pp. 6-11 en sommaire ; médiane **35** (dérogation) | 0,8 s |
 | 3 | pas de titre courant ; note `*` p. 36 ; 5 à 60 n1 | 0 titre courant ; 7 notes dont `*` p. 36 ; 18 n1 : les 11 chapitres, 2 titres de couverture, 5 fragments de schémas ou d'OCR | 1,7 s |
 | 4 | signets, 23 titres | signets, 23 n1, 0 n2 | 0,6 s |
@@ -117,6 +117,9 @@ passe de 73 à 27.
 signets à plat (« I » puis « La pierre cubique »), que le moteur fusionne en « I. La
 pierre cubique » et descend d'un niveau (série romaine après des chapitres en chiffres
 arabes) : `titres_n1` passe de 27 à 17, `n2` de non vérifié à 5.
+
+**Puis `notes_min` 46** (retour du contrôle visuel) : les notes de fin « [1] » … « [46] »
+(pp. 134-136, sans titre « Notes ») sont appariées à leurs appels en exposant « [n] ».
 
 ### Attente du n° 2 réécrite : les chapitres du corps
 
@@ -194,7 +197,11 @@ Chacune a son test unitaire, sans PDF du corpus.
    exposant lu par l'OCR (« Hartmann2 », n° 6) — seulement si le mot finit par une
    minuscule et qu'une note de ce numéro attend ; (c) notes regroupées : une note
    restée collée à la précédente (« … introduction. 6. Kant : … ») en est détachée si
-   son numéro suit le précédent.
+   son numéro suit le précédent ; (d) notes Calibre (n° 1) : appels et marqueurs entre
+   crochets « [n] », stockés sans crochets ; section de notes implicite, sans titre
+   « Notes », ouverte au paragraphe de la note 1 si les notes 2 et 3 ouvrent des
+   paragraphes dans les 8 blocs suivants et si un appel « 1 » les précède ; un « [n+1] »
+   collé en fin de note (« … 5e partie. [32] ») ouvre la note suivante.
 
 Défauts signalés aux revues précédentes et **non observés** sur le corpus : le motif
 `DEBUT_NOTE` qui couperait une note sur « 12 mars 1914 » (les dates en début de
@@ -211,8 +218,9 @@ Fait sans interface graphique, sur le contenu des EPUB n° 1, 3 et 6 (décompres
   n° 6, 3 titres seulement (les titres de conférence, au corps du texte et non gras,
   ne sont pas détectés).
 - **Notes** : n° 3, 7 notes `<aside epub:type="footnote">`, appel `<a epub:type="noteref">`
-  et retour `<a href="#appel-N">↩</a>` ; n° 6, 5 notes. Le n° 1 n'a aucune note
-  appariée (notes en fin de livre appelées « [1] », non gérées).
+  et retour `<a href="#appel-N">↩</a>` ; n° 6, 5 notes. Le n° 1 n'avait aucune note
+  appariée (notes en fin de livre appelées « [1] ») ; depuis le retour du contrôle
+  visuel, ses 46 notes sont appariées, en fin du dernier chapitre.
 - **En-têtes** : aucun « L'alchimie spirituelle » + numéro dans le n° 3 hors de la
   table des matières d'origine ; aucun pied « 92 93 » dans le n° 6.
 - **Double page** (n° 6) : ancres `g` puis `d` page après page ; un paragraphe coupé
@@ -236,7 +244,6 @@ l'ordre de lecture de la double page (n° 6).
 
 ## Limites connues (hors attentes)
 
-- n° 1 : notes de fin « [1] »… non appariées (format Calibre d'appels entre crochets).
 - n° 3 : les notes dont l'OCR a lu le « * » comme « • » restent du texte avec un point
   à vérifier ; les étiquettes de schémas donnent des titres parasites (plan 6).
 - n° 4 p. 3 et n° 5 p. 2 : l'année seule en bas de la page de titre (« 1980 »,
