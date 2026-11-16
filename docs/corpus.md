@@ -10,9 +10,11 @@ EPUBCHECK_JAR=$PWD/vendor/epubcheck/epubcheck-5.4.0/epubcheck.jar \
   cargo test --release -p plumeo-moteur --test corpus -- --ignored --nocapture
 ```
 
-Sans `PLUMEO_CORPUS`, le test échoue avec un message explicite. Sans `EPUBCHECK_JAR`,
-la validation epubcheck est sautée. Le test affiche une ligne de mesures par livre,
-puis ses échecs et ses dérogations.
+Sans `PLUMEO_CORPUS`, le test échoue avec un message explicite. L'EPUB de chaque livre est
+toujours généré (dossier temporaire) et ses contrôles de structure tournent toujours ; sans
+`EPUBCHECK_JAR`, seule la validation epubcheck est sautée, et la ligne de mesures du livre
+finit par « epubcheck non lancé » (« epubcheck lancé » sinon). Le test affiche une ligne de
+mesures par livre, puis ses échecs et ses dérogations.
 
 ## Fichiers
 
@@ -32,10 +34,12 @@ Communes à chaque livre :
 - le Markdown commence par un titre `#` égal au titre du livre (premier bloc, texte
   normalisé) ;
 - au moins 1 retrait si la série a des zones non nulles ;
-- epubcheck sans erreur (si `EPUBCHECK_JAR`) ; l'EPUB validé a alors autant de liens
-  d'entrée de sommaire (`href="chap-…#t-…"` dans les chapitres, hors `nav.xhtml`) que le
-  Markdown a d'entrées : une entrée dont le titre visé manque y deviendrait du texte sans
-  avertissement.
+- epubcheck sans erreur (si `EPUBCHECK_JAR`) ;
+- l'EPUB (généré avec ou sans epubcheck) a autant de liens d'entrée de sommaire
+  (`href="chap-…#t-…"` dans les chapitres, hors `nav.xhtml`) que le Markdown a d'entrées :
+  une entrée dont le titre visé manque y deviendrait du texte sans avertissement ;
+- un chapitre H1 « Table des matières » ou « Sommaire » à liens internes est
+  `chap-002.xhtml`, juste après la page de titre.
 
 Propres à un livre (un champ absent ou `null` n'est pas vérifié) :
 
@@ -48,6 +52,7 @@ Propres à un livre (un champ absent ou `null` n'est pas vérifié) :
 | `n1_page_min` | aucun titre de niveau 1 avant cette page (titres du corps, pas d'un résumé) |
 | `n2` | nombre exact de titres de niveau 2 |
 | `entrees_sommaire` | nombre exact d'entrées de sommaire imprimé rendues cliquables (`[texte](#t-…)`) |
+| `sommaire_en_tete` | `true` : l'EPUB **doit** avoir un chapitre « Table des matières » ou « Sommaire » à liens, et c'est `chap-002.xhtml` (le contrôle ne passe plus à vide) ; absent ou `null` : le chapitre n'est contrôlé que s'il existe |
 | `titres_contiennent` | textes qu'au moins un titre doit contenir |
 | `notes_pages` | `{ "page", "marqueur" }` : au moins une note ancrée sur la page (de ce marqueur) |
 | `notes_min` | nombre minimal de notes appariées |
@@ -77,6 +82,11 @@ mêmes décomptes. Chronique de l'Akasha passe ainsi de `titres_n1` 23 à 22 : s
 (17 chapitres et les 5 parties du chapitre 17). `entrees_sommaire` est fixé aussi pour
 Chronique de l'Akasha (12), Le sens de l'amour (5) et Anges et l'arbre de vie (4, sommaire
 d'origine p. 11), valeurs mesurées ; les autres livres n'ont pas d'entrée cliquable.
+
+`sommaire_en_tete: true` est posée après mesure sur les n° 1, 3, 4 et 6, dont l'EPUB a un
+chapitre de sommaire à liens en `chap-002.xhtml`. Les n° 2 (Anges : sommaire sans titre,
+rendu en texte) et 5 (Le sens de l'amour : `## SOMMAIRE`, titre de niveau 2) n'ont pas de tel
+chapitre, ni les n° 7 à 9 (sans entrée cliquable) : la poser sur eux échoue.
 
 `derogations` (`raison`, `mediane_paragraphes_min`, `nombres_isoles_pages`) assouplit
 une attente **commune** que le livre ne peut pas tenir, pour une raison mesurée et
@@ -120,20 +130,20 @@ Aucun livre n'a eu besoin d'une autre série.
 ## Résultats (2026-11-16)
 
 Conversion en `--release`, epubcheck 5.4.0 : **les 9 EPUB sont valides**, le test passe.
-Mesures et durées du dernier passage (2026-11-16, vague finale des retours du contrôle
-visuel), puis lot « sommaires imprimés » (plan 2).
+Mesures et durées du dernier passage (2026-11-16, finitions du lot « sommaires imprimés »,
+plan 2, sur 45ba3c7), après la vague finale des retours du contrôle visuel.
 
 | # | Attendu | Mesuré | Durée |
 |---|---|---|---|
-| 1 | signets, ~~73~~ ~~27~~ **17** n1 + 5 n2 dont « VISITE À PATMOS » (voir plus bas) ; 22 entrées de sommaire ; ≥ 46 notes appariées | signets, 17 n1 + 5 n2 (« 1 VISITE À PATMOS »…) ; 22 entrées de sommaire ; 46 notes appariées ; médiane 569 car. | 0,3 s |
+| 1 | signets, ~~73~~ ~~27~~ **17** n1 + 5 n2 dont « VISITE À PATMOS » (voir plus bas) ; 22 entrées de sommaire ; sommaire en `chap-002` ; ≥ 46 notes appariées | signets, 17 n1 + 5 n2 (« 1 VISITE À PATMOS »…) ; 22 entrées de sommaire ; 46 notes appariées ; médiane 569 car. | 0,2 s |
 | 2 | gras-majuscules, 10 n1 tous à partir de la p. 19, dont « LES 4 ÉLÉMENTS », « LA GENÈSE », « LUCIFER ET LE CHRIST » (attente réécrite, voir plus bas) ; 4 entrées de sommaire | gras-majuscules, les 10 ouvertures du corps (pp. 19, 26, 31, 32, 33, 36, 38, 40, 53, 56) ; 24 n2 ; 48 titres courants retirés ; résumé pp. 6-11 en sommaire, dont p. 11 aux 4 entrées liées ; médiane **32** (dérogation) | 0,2 s |
-| 3 | pas de titre courant ; note `*` p. 36 ; 5 à 60 n1 ; **11 entrées de sommaire** ; aucune entrée collée à la suivante | 0 titre courant ; 7 notes dont `*` p. 36 ; 11 entrées de sommaire liées (sommaire de la p. 205, « TABLE DES MATIÈRES » en `#`) ; 14 n1 (les titres illisibles, `# Corps m\--`, `# np`, `# s`…, restent des paragraphes avec le point « texte peu plausible pour un titre (OCR, schéma, code) : non retenu ») ; médiane 282 | 1,2 s |
-| 4 | signets, 22 titres (23 moins « SOMMAIRE », titre de service) ; 12 entrées de sommaire | signets, 22 n1, 0 n2, 12 entrées de sommaire ; médiane 603 | 0,8 s |
-| 5 | signets, 4 n1 et 7 n2 ; 5 entrées de sommaire | signets, 4 n1, 7 n2, 5 entrées de sommaire ; médiane 456 | 0,3 s |
-| 6 | `g` et `d` ; pas de « 92 93 » ; ≥ 1 note appariée ; titre du livre en tête ; **14 n1** dont les titres complets des conférences I et X ; **14 entrées de sommaire** ; aucun numéro romain seul en paragraphe | `g` et `d` ; 0 pied résiduel ; 5 notes appariées ; titre du livre en tête ; 14 n1 (3 parties, 10 conférences, « Ouvrages de Rudolf Steiner… ») + « TABLE DES MATIÈRES » ; 14 entrées liées ; médiane 221 | 0,4 s |
+| 3 | pas de titre courant ; note `*` p. 36 ; 5 à 60 n1 ; **11 entrées de sommaire** ; sommaire en `chap-002` ; aucune entrée collée à la suivante (`\d+\s+Si vous ne mourez pas`) | 0 titre courant ; 7 notes dont `*` p. 36 ; 11 entrées de sommaire liées (sommaire de la p. 205, « TABLE DES MATIÈRES » en `#`) ; 14 n1 (les titres illisibles, `# Corps m\--`, `# np`, `# s`…, restent des paragraphes avec le point « texte peu plausible pour un titre (OCR, schéma, code) : non retenu ») ; médiane 282 | 1,4 s |
+| 4 | signets, 22 titres (23 moins « SOMMAIRE », titre de service) ; 12 entrées de sommaire ; sommaire en `chap-002` | signets, 22 n1, 0 n2, 12 entrées de sommaire ; médiane 603 | 0,8 s |
+| 5 | signets, 4 n1 et 7 n2 ; 5 entrées de sommaire | signets, 4 n1, 7 n2, 5 entrées de sommaire ; médiane 456 | 0,2 s |
+| 6 | `g` et `d` ; pas de « 92 93 » ; ≥ 1 note appariée ; titre du livre en tête ; **14 n1** dont les titres complets des conférences I et X ; **14 entrées de sommaire** (voir ci-dessous) ; sommaire en `chap-002` ; aucun numéro romain seul en paragraphe, « I » exclu du motif (« *I* » en italique, p. 66d, légende de schéma) | `g` et `d` ; 0 pied résiduel ; 5 notes appariées ; titre du livre en tête ; 14 n1 (3 parties, 10 conférences, « Ouvrages de Rudolf Steiner… ») + « TABLE DES MATIÈRES » ; 14 entrées liées ; médiane 221 (voir ci-dessous) | 0,3 s |
 | 7 | se convertit ; EPUB valide | 28 n1 ; sommaire pp. 1-2 reconnu ; médiane 123 ; EPUB valide ; schéma p. 6 en texte (plan 6) | 0,8 s |
 | 8 | 19 n1 « CHAPITRE » ; pas de note p. 145 | 19 n1 « CHAPITRE » ; aucune note ; médiane 183 | 0,5 s |
-| 9 | ≥ 8 n1 « CHAPITRE » ; pas de note p. 367 ; < 60 s | 9 n1 dont 8 « CHAPITRE … » (+ « PREMIER CHAPITRE ») ; aucune note ; médiane 258 | 1,8 s |
+| 9 | ≥ 8 n1 « CHAPITRE » ; pas de note p. 367 ; < 60 s | 9 n1 dont 8 « CHAPITRE … » (+ « PREMIER CHAPITRE ») ; aucune note ; médiane 258 | 2,0 s |
 
 ### Dérogations (attentes communes non tenables)
 
@@ -143,6 +153,17 @@ visuel), puis lot « sommaires imprimés » (plan 2).
 | 3 | pas de nombre isolé | « 0 » p. 37, « 00 » p. 106, « 3 » et « 12 » p. 126 | Étiquettes de schémas (scan) : les schémas deviennent des images au plan 6. pp. 106 et 126 : elles étaient avalées par les chaînes de fusion de `raccorder_pages` (corrigées au retour du jalon 1) et ressortent seules. |
 | 7 | pas de nombre isolé | « 1 3 » et « 2 » p. 192 | Étiquettes du schéma des Hiérarchies : plan 6. |
 
+### Finitions du lot « sommaires imprimés » (tâches 1 à 6 des mineurs)
+
+Les finitions (motif de numéro de page partagé, pages de sommaire par demi-page, une seule
+recherche par entrée, numéros seuls absorbés, `sommaire_cliquable` restructurée avec les
+homonymes suivis par sommaire, titre de sommaire reconnu à l'identique par le moteur et par
+l'EPUB) laissent le Markdown des 9 livres et leurs EPUB identiques octet pour octet (hors
+date), sauf un écart : dans Connaissance, seule la p. 3d est désormais un sommaire, si bien que
+la fin de la p. 2d (« 11, rue Verdaine… ») se raccorde à la p. 3g (« Traduction faite… »)
+comme sur `main` ; aucun mot perdu, la médiane (221) et le point « Sommaire », désormais
+ancré en p. 3d, sont inchangés. Le tableau des résultats ne change donc que par les durées.
+
 ### Attentes ajoutées par le lot « sommaires imprimés » (n° 3 et 6)
 
 Mesurées au passage du corpus, puis figées. Les attentes du manifeste (n° 3 et 6)
@@ -151,16 +172,27 @@ Mesurées au passage du corpus, puis figées. Les attentes du manifeste (n° 3 e
 p. 13d à 76g. Le contrôle « sommaire en chap-002 », lui, passait aussi sur l'ancien
 état : aucun chapitre de sommaire à liens n'y était hors de la 2e position (Alchimie
 n'avait pas encore de sommaire lié). Il est prouvé par les tests unitaires
-(`sommaire_en_tete_refuse_ailleurs_qu_en_position_2`, et
+(`sommaire_attendu_mais_absent_refuse`, `sommaire_en_tete_refuse_ailleurs_qu_en_position_2`, et
 `sommaire_imprime_a_la_fin_remonte_en_position_2`, qui vérifie aussi que le chapitre du
 sommaire est bien trouvé en `chap-002.xhtml`), pas par le corpus de l'ancien état.
 
 - **n° 3, `entrees_sommaire: 11`.** Le sommaire de la p. 205 (lignes à points de conduite
   pleine largeur) n'était pas reconnu : 3 paragraphes, dernière entrée recollée au
   colophon de la p. 206. Il donne maintenant ses 11 entrées liées à des titres existants.
-  `absent_regex` `\d+ Si vous ne mourez pas` interdit deux entrées collées dans un
-  paragraphe (« … 11 Si vous ne mourez pas … 31 », présent dans l'ancien Markdown). Le
+  `absent_regex` `\d+\s+Si vous ne mourez pas` interdit deux entrées collées dans un
+  paragraphe (« … 11 Si vous ne mourez pas … 31 », présent dans l'ancien Markdown ; `\s+`
+  couvre aussi une espace insécable ou double, que l'espace simple de `\d+ Si…` laissait
+  passer). Vérifié : le motif trouve cette ligne dans le Markdown reconverti à `02bf46c`
+  (1 occurrence) et n'en trouve aucune dans l'actuel. Le
   contrôle de liens compare en plus les 11 entrées aux 11 liens de l'EPUB.
+- **n° 6, médiane des paragraphes : 114 → 221.** Les lignes du sommaire (p. 3d) sont séparées
+  une à une (`[texte](#t-…)`, hors des statistiques de paragraphes) et les titres (« TABLE DES
+  MATIÈRES », parties, conférences) sortent des paragraphes : ces lignes courtes ne
+  tirent plus la médiane vers le bas.
+- **n° 6, `entrees_sommaire: 14`.** Le sommaire imprimé (p. 3d) a 14 entrées : 3 parties
+  (CONNAISSANCE, LOGIQUE, PENSÉE PRATIQUE), 10 conférences et « Ouvrages de Rudolf Steiner… ».
+  Elles sont comptées et non seulement présumées : l'EPUB doit en porter 14 liens, et le
+  sommaire est attendu en `chap-002.xhtml`.
 - **n° 6, `titres_n1: 14`.** Livre sans signets : les titres de niveau 1 viennent du
   sommaire imprimé (p. 3d). Les 14 sont les 3 parties (CONNAISSANCE, LOGIQUE, PENSÉE
   PRATIQUE), les 10 conférences (« I. LES BASES D'UNE THÉORIE… (I) » à « X. LA CULTURE
@@ -175,12 +207,14 @@ sommaire est bien trouvé en `chap-002.xhtml`), pas par le corpus de l'ancien é
 - **n° 6, `absent_regex` `^(II|III|IV|V|VI|VII|VIII|IX|X)$`** : aucun numéro romain seul
   en paragraphe (`absent_regex` porte sur les paragraphes du Markdown, titres, entrées et
   notes exclus). « I » est volontairement absent du motif : p. 66d porte un « *I* »
-  en italique, légende de schéma (vrai contenu), et la 1re conférence est déjà couverte
-  par `titres_contiennent`.
+  en italique, légende de schéma (vrai contenu), qu'un tel motif signalerait à tort ; la 1re
+  conférence est déjà couverte par `titres_contiennent`.
 - **EPUB, sommaire en tête (tous les livres).** Quand un chapitre au titre H1
   « Table des matières » ou « Sommaire » (casse et accents ignorés) porte des liens
   internes `#t-…`, le test exige que ce soit `chap-002.xhtml`, juste après la page de
-  titre. Les n° 1, 3, 4 et 6 sont concernés ; les autres n'ont pas de tel chapitre.
+  titre. Les n° 1, 3, 4 et 6 en ont un, et l'attente `sommaire_en_tete: true` les oblige à
+  en avoir : sans elle, un livre sans chapitre de sommaire passerait à vide. Les autres n'ont
+  pas de tel chapitre.
 
 ### Attente du n° 1 corrigée : 27 titres et non 73
 

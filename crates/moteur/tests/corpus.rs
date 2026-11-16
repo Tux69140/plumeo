@@ -85,6 +85,11 @@ struct Attentes {
     /// Ancres en `g` et en `d` (double page).
     #[serde(default)]
     moities: bool,
+    /// `true` : l'EPUB doit avoir un chapitre « Table des matières » ou « Sommaire » à
+    /// liens, et c'est `chap-002.xhtml`. Sans cette attente, un tel chapitre n'est contrôlé
+    /// (position 2) que s'il existe.
+    #[serde(default)]
+    sommaire_en_tete: Option<bool>,
     /// Durée maximale de la conversion, en secondes (mesurée en `--release`).
     duree_max_s: Option<f64>,
 }
@@ -287,54 +292,68 @@ fn liens_de_sommaire(epub: &Path) -> Result<usize, String> {
 
 /// Vérifie que le chapitre « Table des matières » ou « Sommaire » (titre H1, à la casse
 /// et aux accents près) qui contient des liens internes est `chap-002.xhtml`, juste après
-/// la page de titre. Sans chapitre de ce genre, rien à vérifier.
-fn verifier_sommaire_en_tete(chapitres: &[(String, String)]) -> Result<(), String> {
+/// la page de titre. Si `attendu`, l'EPUB doit en plus avoir un tel chapitre : le contrôle
+/// ne passe pas à vide. Sinon, sans chapitre de ce genre, rien à vérifier.
+fn verifier_sommaire_en_tete(chapitres: &[(String, String)], attendu: bool) -> Result<(), String> {
     let h1 = Regex::new(r"(?s)<h1[^>]*>(.*?)</h1>").unwrap();
     let balises = Regex::new(r"<[^>]*>").unwrap();
     let lien = Regex::new(LIEN_SOMMAIRE).unwrap();
+    let mut trouve = false;
     for (nom, texte) in chapitres {
         let Some(c) = h1.captures(texte) else { continue };
         let titre = normaliser(balises.replace_all(&c[1], "").trim());
-        if ["table des matieres", "sommaire"].contains(&titre.as_str())
-            && lien.is_match(texte)
-            && nom != "chap-002.xhtml"
-        {
-            return Err(format!(
-                "le chapitre « {} » à liens de sommaire est {nom} au lieu de chap-002.xhtml (juste après la page de titre)",
-                balises.replace_all(&c[1], "").trim()
-            ));
+        if ["table des matieres", "sommaire"].contains(&titre.as_str()) && lien.is_match(texte) {
+            trouve = true;
+            if nom != "chap-002.xhtml" {
+                return Err(format!(
+                    "le chapitre « {} » à liens de sommaire est {nom} au lieu de chap-002.xhtml (juste après la page de titre)",
+                    balises.replace_all(&c[1], "").trim()
+                ));
+            }
         }
+    }
+    if attendu && !trouve {
+        return Err("sommaire attendu : aucun chapitre « Table des matières » ou « Sommaire » à liens dans l'EPUB \
+                    (il devrait être chap-002.xhtml)"
+            .into());
     }
     Ok(())
 }
 
-/// Mesures d'un EPUB validé par epubcheck.
+/// Mesures d'un EPUB généré (et validé par epubcheck si le jar est donné).
 struct ControleEpub {
     /// Nombre de liens d'entrée de sommaire (`liens_de_sommaire`).
     liens: usize,
     /// Résultat de `verifier_sommaire_en_tete`.
     sommaire_en_tete: Result<(), String>,
+    /// epubcheck a été lancé (donc l'EPUB est valide : sinon l'appel renvoie une erreur).
+    epubcheck_lance: bool,
 }
 
-/// Génère l'EPUB et le valide avec epubcheck ; renvoie ses mesures.
-fn epubcheck(jar: &str, markdown: &str, nom: &str) -> Result<ControleEpub, String> {
+/// Génère l'EPUB dans un dossier temporaire, le valide avec epubcheck si `jar` est donné
+/// (c'est la seule étape qui en dépend), puis mesure sa structure.
+fn controler_epub(jar: Option<&str>, markdown: &str, nom: &str, sommaire_attendu: bool) -> Result<ControleEpub, String> {
     let dossier = tempfile::tempdir().map_err(|e| e.to_string())?;
     let chemin = dossier.path().join("livre.epub");
     generer_epub(markdown, &meta_corpus(nom), None, &chemin).map_err(|e| format!("generer_epub : {e}"))?;
-    let sortie = std::process::Command::new("java")
-        .args(["-jar", jar])
-        .arg(&chemin)
-        .output()
-        .map_err(|e| format!("java : {e}"))?;
-    if sortie.status.success() {
-        return Ok(ControleEpub {
-            liens: liens_de_sommaire(&chemin)?,
-            sommaire_en_tete: verifier_sommaire_en_tete(&chapitres_epub(&chemin)?),
-        });
+    if let Some(jar) = jar {
+        let sortie = std::process::Command::new("java")
+            .args(["-jar", jar])
+            .arg(&chemin)
+            .output()
+            .map_err(|e| format!("java : {e}"))?;
+        if !sortie.status.success() {
+            let texte = String::from_utf8_lossy(&sortie.stdout).to_string() + &String::from_utf8_lossy(&sortie.stderr);
+            let erreurs: Vec<&str> =
+                texte.lines().filter(|l| l.starts_with("ERROR") || l.starts_with("FATAL")).take(5).collect();
+            return Err(format!("epubcheck : {}", erreurs.join(" | ")));
+        }
     }
-    let texte = String::from_utf8_lossy(&sortie.stdout).to_string() + &String::from_utf8_lossy(&sortie.stderr);
-    let erreurs: Vec<&str> = texte.lines().filter(|l| l.starts_with("ERROR") || l.starts_with("FATAL")).take(5).collect();
-    Err(format!("epubcheck : {}", erreurs.join(" | ")))
+    Ok(ControleEpub {
+        liens: liens_de_sommaire(&chemin)?,
+        sommaire_en_tete: verifier_sommaire_en_tete(&chapitres_epub(&chemin)?, sommaire_attendu),
+        epubcheck_lance: jar.is_some(),
+    })
 }
 
 /// Convertit un livre et renvoie la liste de ses attentes non tenues.
@@ -401,22 +420,22 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
     if zones_non_nulles(&reglages) && conversion.retraits.is_empty() {
         echecs.push("aucun retrait malgré des zones non nulles".into());
     }
-    // Liens d'entrée de sommaire de l'EPUB validé, comparés plus bas aux entrées du Markdown.
-    let liens_epub = match std::env::var("EPUBCHECK_JAR") {
-        Ok(jar) => match epubcheck(&jar, &conversion.markdown, &entree.fichier) {
+    // EPUB toujours généré, structure toujours contrôlée ; seul epubcheck dépend de EPUBCHECK_JAR.
+    // Les liens d'entrée de sommaire sont comparés plus bas aux entrées du Markdown.
+    let jar = std::env::var("EPUBCHECK_JAR").ok();
+    let (liens_epub, epubcheck_lance) =
+        match controler_epub(jar.as_deref(), &conversion.markdown, &entree.fichier, a.sommaire_en_tete == Some(true)) {
             Ok(controle) => {
                 if let Err(e) = controle.sommaire_en_tete {
                     echecs.push(e);
                 }
-                Some(controle.liens)
+                (Some(controle.liens), controle.epubcheck_lance)
             }
             Err(e) => {
                 echecs.push(e);
-                None
+                (None, jar.is_some())
             }
-        },
-        Err(_) => None,
-    };
+        };
 
     // Attentes propres au livre.
     let titres = |niveau: usize| -> Vec<&BlocMd> {
@@ -536,7 +555,7 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
     }
 
     println!(
-        "{} : {:.1} s, titres {} (n1 {}, n1{qualif} {}, n2 {}), {entrees} entrées de sommaire, {} notes, paragraphes {} (médiane {med}, max {max}), {} retraits, {} points",
+        "{} : {:.1} s, titres {} (n1 {}, n1{qualif} {}, n2 {}), {entrees} entrées de sommaire, {} notes, paragraphes {} (médiane {med}, max {max}), {} retraits, {} points, {}",
         entree.fichier,
         duree,
         source_texte(conversion.source_titres),
@@ -547,6 +566,7 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
         longueurs.len(),
         conversion.retraits.len(),
         conversion.points.len(),
+        if epubcheck_lance { "epubcheck lancé" } else { "epubcheck non lancé" },
     );
     if let Some(d) = d {
         println!("  DÉROGATION : {}", d.raison);
@@ -612,20 +632,39 @@ mod tests {
     #[test]
     fn sommaire_en_tete_accepte_en_position_2_ou_absent() {
         let en_2 = [chapitre("chap-001.xhtml", "Livre", ""), chapitre("chap-002.xhtml", "Table des matières", LIEN)];
-        assert_eq!(verifier_sommaire_en_tete(&en_2), Ok(()));
-        // Sans lien interne, ou sans chapitre de sommaire : rien à vérifier.
+        assert_eq!(verifier_sommaire_en_tete(&en_2, false), Ok(()));
+        assert_eq!(verifier_sommaire_en_tete(&en_2, true), Ok(()));
+        // Sans lien interne, ou sans chapitre de sommaire : rien à vérifier tant que le
+        // livre n'attend pas de sommaire.
         let sans_lien = [chapitre("chap-001.xhtml", "Livre", ""), chapitre("chap-004.xhtml", "SOMMAIRE", "<p>Un 7</p>")];
-        assert_eq!(verifier_sommaire_en_tete(&sans_lien), Ok(()));
+        assert_eq!(verifier_sommaire_en_tete(&sans_lien, false), Ok(()));
         let autre = [chapitre("chap-005.xhtml", "Un chapitre", LIEN)];
-        assert_eq!(verifier_sommaire_en_tete(&autre), Ok(()));
+        assert_eq!(verifier_sommaire_en_tete(&autre, false), Ok(()));
+    }
+
+    #[test]
+    fn sommaire_attendu_mais_absent_refuse() {
+        // Le contrôle ne passe plus à vide : un livre qui attend un sommaire à liens
+        // échoue s'il n'a aucun chapitre de ce genre.
+        let sans_chapitre = [chapitre("chap-001.xhtml", "Livre", ""), chapitre("chap-002.xhtml", "Un chapitre", LIEN)];
+        let e = verifier_sommaire_en_tete(&sans_chapitre, true).unwrap_err();
+        assert!(e.contains("chap-002.xhtml") && e.contains("sommaire"), "{e}");
+        // Un chapitre « Sommaire » sans lien interne n'est pas un sommaire cliquable.
+        let sans_lien = [chapitre("chap-001.xhtml", "Livre", ""), chapitre("chap-002.xhtml", "SOMMAIRE", "<p>Un 7</p>")];
+        assert!(verifier_sommaire_en_tete(&sans_lien, true).is_err());
+        assert!(verifier_sommaire_en_tete(&[], true).is_err());
+        // Sans attente, ces mêmes livres passent.
+        assert_eq!(verifier_sommaire_en_tete(&sans_chapitre, false), Ok(()));
     }
 
     #[test]
     fn sommaire_en_tete_refuse_ailleurs_qu_en_position_2() {
         for titre in ["Table des matières", "TABLE DES MATIERES", "Sommaire", "<em>SOMMAIRE</em>"] {
             let tard = [chapitre("chap-001.xhtml", "Livre", ""), chapitre("chap-004.xhtml", titre, LIEN)];
-            let e = verifier_sommaire_en_tete(&tard).unwrap_err();
-            assert!(e.contains("chap-004.xhtml") && e.contains("chap-002.xhtml"), "{e}");
+            for attendu in [false, true] {
+                let e = verifier_sommaire_en_tete(&tard, attendu).unwrap_err();
+                assert!(e.contains("chap-004.xhtml") && e.contains("chap-002.xhtml"), "{e}");
+            }
         }
     }
 
@@ -642,7 +681,23 @@ mod tests {
         // passerait à vide.
         let (_, chap_2) = chapitres.iter().find(|(nom, _)| nom == "chap-002.xhtml").expect("chap-002.xhtml");
         assert!(chap_2.contains("Table des matières</h1>") && chap_2.contains("#t-un\""), "{chap_2}");
-        assert_eq!(verifier_sommaire_en_tete(&chapitres), Ok(()));
+        assert_eq!(verifier_sommaire_en_tete(&chapitres, true), Ok(()));
+    }
+
+    #[test]
+    fn controle_epub_sans_epubcheck_verifie_quand_meme_la_structure() {
+        let md = format!(
+            "{ANCRE}\n# Livre\n\n{ANCRE}\n# Un\n\n{ANCRE}\nTexte.\n\n{ANCRE}\n# Table des matières\n\n{ANCRE}\n[Un](#t-un)\n"
+        );
+        let controle = controler_epub(None, &md, "Livre", true).unwrap();
+        assert!(!controle.epubcheck_lance);
+        assert_eq!(controle.liens, 1);
+        assert_eq!(controle.sommaire_en_tete, Ok(()));
+        // Sans chapitre de sommaire, l'attente échoue aussi sans epubcheck.
+        let sans = format!("{ANCRE}\n# Livre\n\n{ANCRE}\n# Un\n\n{ANCRE}\nTexte.\n");
+        let controle = controler_epub(None, &sans, "Livre", true).unwrap();
+        assert!(controle.sommaire_en_tete.is_err());
+        assert_eq!(controler_epub(None, &sans, "Livre", false).unwrap().sommaire_en_tete, Ok(()));
     }
 
     #[test]
