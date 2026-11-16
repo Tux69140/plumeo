@@ -1,6 +1,6 @@
 use plumeo_moteur::fixtures::{StyleFixture, TexteFixture, fabriquer_pdf};
 use plumeo_moteur::modele::{Ancre, ErreurMoteur, Moitie};
-use plumeo_moteur::pdf::{DocumentPdf, nettoyer_texte};
+use plumeo_moteur::pdf::{DocumentPdf, nettoyer_chaine, nettoyer_texte};
 
 #[test]
 fn lit_les_mots_avec_position_et_taille() {
@@ -49,6 +49,14 @@ fn pdf_illisible_donne_une_erreur() {
 fn nettoie_les_caracteres_parasites() {
     assert_eq!(nettoyer_texte("ef\u{fb01}cace\u{2}\u{fffe}"), "efficace");
     assert_eq!(nettoyer_texte("Cite\u{301}"), "Cité"); // NFC
+}
+
+#[test]
+fn nettoie_les_chaines_hors_page() {
+    // Métadonnées, signets, titre et auteur donnés à la CLI : les sauts de ligne et
+    // tabulations deviennent des espaces, le reste comme `nettoyer_texte`.
+    assert_eq!(nettoyer_chaine("T\u{1}itre\r\nsur\tdeux\u{fb01}"), "Titre  sur deuxfi");
+    assert_eq!(nettoyer_chaine("Cite\u{301}"), "Cité");
 }
 
 #[test]

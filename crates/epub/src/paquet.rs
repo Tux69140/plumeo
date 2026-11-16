@@ -20,7 +20,7 @@ fn zip_err(e: zip::result::ZipError) -> ErreurEpub {
     }
 }
 
-fn nav(chapitres: &[Chapitre], meta: &Metadonnees) -> String {
+pub fn nav(chapitres: &[Chapitre], meta: &Metadonnees) -> String {
     let mut s = String::from("<nav epub:type=\"toc\" id=\"toc\">\n<h1>Table des matières</h1>\n<ol>\n");
     for (i, c) in chapitres.iter().enumerate() {
         let f = nom_chapitre(i);
@@ -38,7 +38,7 @@ fn nav(chapitres: &[Chapitre], meta: &Metadonnees) -> String {
     page(&meta.langue, &meta.titre, &s)
 }
 
-fn opf(chapitres: &[Chapitre], meta: &Metadonnees, couverture: bool) -> String {
+pub fn opf(chapitres: &[Chapitre], meta: &Metadonnees, couverture: bool) -> String {
     let mut s = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"id-livre\" xml:lang=\"");
     s.push_str(&echapper(&meta.langue));
     s.push_str("\">\n<metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n");
@@ -76,6 +76,8 @@ fn opf(chapitres: &[Chapitre], meta: &Metadonnees, couverture: bool) -> String {
 pub fn ecrire(
     chapitres: &[Chapitre],
     meta: &Metadonnees,
+    opf: &str,
+    nav: &str,
     couverture_png: Option<&[u8]>,
     sortie: &Path,
 ) -> Result<(), ErreurEpub> {
@@ -92,8 +94,8 @@ pub fn ecrire(
 
     ajouter("mimetype", stocke, b"application/epub+zip")?;
     ajouter("META-INF/container.xml", comprime, CONTAINER.as_bytes())?;
-    ajouter("OEBPS/content.opf", comprime, opf(chapitres, meta, couverture_png.is_some()).as_bytes())?;
-    ajouter("OEBPS/nav.xhtml", comprime, nav(chapitres, meta).as_bytes())?;
+    ajouter("OEBPS/content.opf", comprime, opf.as_bytes())?;
+    ajouter("OEBPS/nav.xhtml", comprime, nav.as_bytes())?;
     ajouter("OEBPS/style.css", comprime, CSS.as_bytes())?;
     if let Some(png) = couverture_png {
         ajouter("OEBPS/images/couverture.png", comprime, png)?;

@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use plumeo_epub::{Metadonnees, generer_epub};
 use plumeo_moteur::metadonnees::{langue_epub, nom_sortie, proposer};
 use plumeo_moteur::modele::Moitie;
-use plumeo_moteur::pdf::DocumentPdf;
+use plumeo_moteur::pdf::{DocumentPdf, nettoyer_chaine};
 use plumeo_moteur::reglages::{ReglagesSerie, SourceTitres};
 use plumeo_moteur::{apercu_page, convertir_livre};
 use unicode_normalization::UnicodeNormalization;
@@ -104,8 +104,8 @@ fn convertir(
         .map(|s| s.to_string_lossy().nfc().collect())
         .unwrap_or_default();
     let (titre_propose, auteur_propose) = proposer(&doc.meta(), &nom_fichier);
-    let titre = titre.unwrap_or(titre_propose);
-    let auteur = auteur.unwrap_or(auteur_propose);
+    let titre = nettoyer_chaine(&titre.unwrap_or(titre_propose));
+    let auteur = nettoyer_chaine(&auteur.unwrap_or(auteur_propose));
 
     let conversion = convertir_livre(&doc, &reglages, forcer, &mut |p, total| {
         eprint!("\rpage {p}/{total}");

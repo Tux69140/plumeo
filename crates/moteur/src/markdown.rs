@@ -139,7 +139,7 @@ pub fn ecrire_markdown(blocs: &[Bloc]) -> String {
                     vider(&mut sortie, &mut notes);
                 }
                 let diese = "#".repeat((*niveau).clamp(1, 3) as usize);
-                let texte = echapper_md(&texte.replace('\n', " "), true);
+                let texte = echapper_md(&texte.replace(['\n', '\r'], " "), true);
                 bloc_ancre(&mut sortie, *ancre, format!("{diese} {texte}"));
             }
             Bloc::Note { etiquette, segments, ancre, .. } => {
@@ -252,6 +252,12 @@ mod tests {
         let md = ecrire_markdown(&[titre(2, "Titre"), para(vec![texte("Texte", false, false)])]);
         let a = "<!-- @p12 120,145,880,210 -->";
         assert_eq!(md, format!("{a}\n## Titre\n\n{a}\nTexte\n"));
+    }
+
+    #[test]
+    fn titre_sur_une_seule_ligne() {
+        let md = ecrire_markdown(&[titre(1, "Un\r\ndeux\rtrois")]);
+        assert_eq!(md.lines().nth(1), Some("# Un  deux trois"), "{md}");
     }
 
     #[test]

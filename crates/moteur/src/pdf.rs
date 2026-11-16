@@ -139,7 +139,7 @@ impl DocumentPdf {
 
     fn collecter_signet(&self, s: &PdfBookmark<'_>, niveau: u8, sortie: &mut Vec<Signet>) {
         if let (Some(titre), Some(page)) = (s.title(), page_cible(s)) {
-            sortie.push(Signet { titre, niveau, page });
+            sortie.push(Signet { titre: nettoyer_chaine(&titre), niveau, page });
         }
         let mut enfant = s.first_child();
         while let Some(e) = enfant {
@@ -153,7 +153,7 @@ impl DocumentPdf {
             self.doc
                 .metadata()
                 .get(t)
-                .map(|v| v.value().to_string())
+                .map(|v| nettoyer_chaine(v.value()))
                 .unwrap_or_default()
         };
         MetaPdf {
@@ -308,6 +308,13 @@ impl Assembleur {
         self.cloturer();
         self.mots
     }
+}
+
+/// Nettoie une chaîne prise hors du texte des pages (métadonnées, signets, titre ou
+/// auteur saisis) : sauts de ligne et tabulations deviennent des espaces, puis
+/// `nettoyer_texte`.
+pub fn nettoyer_chaine(s: &str) -> String {
+    nettoyer_texte(&s.replace(|c: char| c.is_control() && c.is_whitespace(), " "))
 }
 
 /// Retire les caractères parasites, décompose les ligatures, normalise en NFC.

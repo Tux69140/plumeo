@@ -20,6 +20,8 @@ pub enum ErreurEpub {
     Zip(String),
     #[error("XHTML invalide dans le chapitre {chapitre} : {detail}")]
     XhtmlInvalide { chapitre: usize, detail: String },
+    #[error("XML invalide dans {fichier} : {detail}")]
+    XmlInvalide { fichier: String, detail: String },
 }
 
 pub fn generer_epub(
@@ -35,5 +37,14 @@ pub fn generer_epub(
             return Err(ErreurEpub::XhtmlInvalide { chapitre: i + 1, detail: e.to_string() });
         }
     }
-    paquet::ecrire(&chapitres, meta, couverture_png, sortie)
+    // Métadonnées et titres arrivent aussi dans l'OPF et la nav : un caractère
+    // interdit en XML y rendrait l'EPUB illisible.
+    let opf = paquet::opf(&chapitres, meta, couverture_png.is_some());
+    let nav = paquet::nav(&chapitres, meta);
+    for (fichier, xml) in [("content.opf", &opf), ("nav.xhtml", &nav)] {
+        if let Err(e) = roxmltree::Document::parse(xml) {
+            return Err(ErreurEpub::XmlInvalide { fichier: fichier.into(), detail: e.to_string() });
+        }
+    }
+    paquet::ecrire(&chapitres, meta, &opf, &nav, couverture_png, sortie)
 }

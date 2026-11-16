@@ -76,3 +76,24 @@ fn cli_echoue_avec_code_1_et_message() {
     assert_eq!(r.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&r.stderr).contains("erreur"));
 }
+
+#[test]
+fn cli_nettoie_titre_et_auteur() {
+    use std::io::Read;
+    let (dossier, pdf, serie) = preparer();
+    let sortie = dossier.path().join("sortie");
+    let r = Command::new(env!("CARGO_BIN_EXE_plumeo-cli"))
+        .arg("convertir").arg(&pdf)
+        .arg("--serie").arg(&serie)
+        .arg("--sortie").arg(&sortie)
+        .arg("--titre").arg("Mon\u{1} titre")
+        .arg("--auteur").arg("Ada\rAuteur")
+        .output().unwrap();
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    let epub = std::fs::File::open(sortie.join("Mon titre - Ada Auteur.epub")).unwrap();
+    let mut archive = zip::ZipArchive::new(epub).unwrap();
+    let mut opf = String::new();
+    archive.by_name("OEBPS/content.opf").unwrap().read_to_string(&mut opf).unwrap();
+    assert!(opf.contains("<dc:title>Mon titre</dc:title>"), "{opf}");
+    assert!(opf.contains("<dc:creator>Ada Auteur</dc:creator>"), "{opf}");
+}

@@ -174,6 +174,21 @@ fn em_desequilibre_est_une_erreur() {
 }
 
 #[test]
+fn metadonnees_invalides_refusees_avant_ecriture() {
+    let dir = tempfile::tempdir().unwrap();
+    for (titre, auteur) in [("T\u{1}x", "Ada"), ("Titre", "A\u{1}da")] {
+        let chemin = dir.path().join("x.epub");
+        let m = Metadonnees { titre: titre.into(), auteur: auteur.into(), ..meta() };
+        let r = generer_epub("# A\n\nTexte.\n", &m, None, &chemin);
+        assert!(
+            matches!(&r, Err(plumeo_epub::ErreurEpub::XmlInvalide { fichier, .. }) if fichier == "content.opf"),
+            "{r:?}"
+        );
+        assert!(!chemin.exists());
+    }
+}
+
+#[test]
 fn appel_sans_definition_et_definition_sans_appel() {
     let x = chap1("# T\n\nA[^9-1] sans def.\n");
     assert!(x.contains("A<sup>1</sup> sans def."), "{x}");
