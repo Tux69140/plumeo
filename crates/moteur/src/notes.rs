@@ -370,26 +370,37 @@ fn ouvre_la_note(b: &Bloc, numero: &str) -> bool {
     matches!(b, Bloc::Paragraphe(p) if extraire_marqueur(&p.segments).is_some_and(|(m, _)| m == numero))
 }
 
-/// Les segments contiennent-ils un appel de note de marqueur `marqueur` ?
-fn appelle(segments: &[Segment], marqueur: &str) -> bool {
-    let mut trouve = false;
-    convertir_appels(segments.to_vec(), &mut |m| {
-        trouve |= m == marqueur;
-        None
-    });
-    trouve
+/// Les notes `attendues` trouvent-elles toutes un appel dans `portee` ? Appariement à
+/// blanc, à la condition de l'appariement réel (`apparier_avec`) : un appel ne compte
+/// que si une note de ce numéro attend encore, et chaque note prend un seul appel.
+fn toutes_appelees(portee: &[Bloc], attendues: &[&str]) -> bool {
+    let mut libres = attendues.to_vec();
+    for b in portee {
+        if libres.is_empty() {
+            break;
+        }
+        if let Bloc::Paragraphe(p) = b {
+            convertir_appels(p.segments.clone(), &mut |m| {
+                let k = libres.iter().position(|&n| n == m)?;
+                libres.remove(k);
+                Some(String::new())
+            });
+        }
+    }
+    libres.is_empty()
 }
 
 /// Section de notes sans titre « Notes » (notes Calibre en fin de livre) : elle s'ouvre
 /// au paragraphe `blocs[i]` de la note 1 si les notes 2 et 3 ouvrent des paragraphes
-/// parmi les 8 blocs suivants et si un appel « 1 » les précède dans la portée.
+/// parmi les 8 blocs suivants et si les appels « 1 », « 2 » et « 3 » les précèdent
+/// dans la portée (un appel « 1 » égaré ne suffit pas à faire d'une liste des notes).
 fn ouvre_section_implicite(blocs: &[Bloc], i: usize, portee: &[Bloc]) -> bool {
     if !ouvre_la_note(&blocs[i], "1") {
         return false;
     }
     let suivants = &blocs[i + 1..blocs.len().min(i + 1 + PORTEE_SECTION_IMPLICITE)];
     ["2", "3"].iter().all(|n| suivants.iter().any(|b| ouvre_la_note(b, n)))
-        && portee.iter().any(|b| matches!(b, Bloc::Paragraphe(p) if appelle(&p.segments, "1")))
+        && toutes_appelees(portee, &["1", "2", "3"])
 }
 
 /// Un titre termine la section de notes, sauf un intertitre (niveau 2 ou plus,
@@ -963,53 +974,93 @@ mod tests {
         assert_eq!(blocs.len(), 7);
     }
 
+    /// Paragraphe du corps portant les appels en exposant `marqueurs`.
+    fn appels(marqueurs: &[&str]) -> Bloc {
+        let segments =
+            marqueurs.iter().flat_map(|m| [texte(" mot"), Segment::Exposant((*m).into())]).collect();
+        bloc_para(segments, 1, 0.2)
+    }
+
+    /// Liste « k. Point k » de 1 à `n`.
+    fn liste(n: usize) -> Vec<Bloc> {
+        (1..=n).map(|k| bloc_para(vec![texte(&format!("{k}. Point {k}"))], 4, 0.1 * k as f32)).collect()
+    }
+
+    fn sans_section(blocs: Vec<Bloc>) {
+        let (sortie, retraits, _) = notes_regroupees(blocs.clone(), &mut Etiqueteuse::new(), &Vocabulaire::default());
+        assert!(retraits.is_empty());
+        assert!(notes_du_livre(&sortie).is_empty());
+        // Aucun paragraphe recollé à un autre : le corps reste tel quel, appels compris.
+        assert_eq!(format!("{sortie:?}"), format!("{blocs:?}"));
+    }
+
     #[test]
     fn section_implicite_en_chiffres_simples() {
         let mut et = Etiqueteuse::new();
         let blocs = vec![
-            bloc_para(
-                vec![texte("Un"), Segment::Exposant("1".into()), texte(" deux"), Segment::Exposant("2".into())],
-                1,
-                0.2,
-            ),
+            appels(&["1", "2", "3"]),
             bloc_para(vec![texte("1. Texte un")], 9, 0.2),
             bloc_para(vec![texte("2. Texte deux")], 9, 0.3),
             bloc_para(vec![texte("3. Texte trois")], 9, 0.4),
+            bloc_para(vec![texte("4. Texte quatre")], 9, 0.5),
         ];
         let (blocs, retraits, points) = notes_regroupees(blocs, &mut et, &Vocabulaire::default());
         assert!(retraits.is_empty());
         let notes = notes_du_livre(&blocs);
-        assert_eq!(notes.len(), 2);
+        assert_eq!(notes.len(), 3);
         assert_eq!(notes[1], ("2-2".into(), "2".into(), "Texte deux".into()));
-        // La note 3 n'a pas d'appel : paragraphe rendu tel quel, signalé.
+        // La note 4 n'a pas d'appel : paragraphe rendu tel quel, signalé.
         assert_eq!(points.len(), 1);
-        assert!(matches!(blocs.last(), Some(Bloc::Paragraphe(p)) if p.texte_brut() == "3 Texte trois"));
+        assert!(matches!(blocs.last(), Some(Bloc::Paragraphe(p)) if p.texte_brut() == "4 Texte quatre"));
     }
 
     #[test]
     fn liste_numerotee_sans_appel_ni_suite_n_ouvre_pas_de_section() {
-        let liste = |n: usize| -> Vec<Bloc> {
-            (1..=n).map(|k| bloc_para(vec![texte(&format!("{k}. Point {k}"))], 4, 0.1 * k as f32)).collect()
-        };
         // Sans appel avant la liste.
         let mut blocs = vec![bloc_para(vec![texte("Trois points :")], 4, 0.05)];
         blocs.extend(liste(3));
-        let (sortie, _, points) = notes_regroupees(blocs.clone(), &mut Etiqueteuse::new(), &Vocabulaire::default());
-        assert!(points.is_empty());
-        assert_eq!(format!("{sortie:?}"), format!("{blocs:?}"));
-        // Avec un appel, mais sans point 3.
-        let mut blocs = vec![bloc_para(vec![texte("Mot"), Segment::Exposant("1".into())], 4, 0.05)];
+        sans_section(blocs);
+        // Avec les appels, mais sans point 3.
+        let mut blocs = vec![appels(&["1", "2", "3"])];
         blocs.extend(liste(2));
-        let (sortie, _, _) = notes_regroupees(blocs.clone(), &mut Etiqueteuse::new(), &Vocabulaire::default());
-        assert!(notes_du_livre(&sortie).is_empty());
-        assert_eq!(sortie.len(), 3);
-        // Avec un appel, mais le point 3 trop loin (au-delà des 8 paragraphes suivants).
-        let mut blocs = vec![bloc_para(vec![texte("Mot"), Segment::Exposant("1".into())], 4, 0.05)];
+        sans_section(blocs);
+        // Avec les appels, mais le point 3 trop loin (9e bloc après le point 1).
+        let mut blocs = vec![appels(&["1", "2", "3"])];
         blocs.extend(liste(2));
         blocs.extend((0..7).map(|_| bloc_para(vec![texte("Texte.")], 5, 0.5)));
         blocs.push(bloc_para(vec![texte("3. Point 3")], 6, 0.1));
-        let (sortie, _, _) = notes_regroupees(blocs.clone(), &mut Etiqueteuse::new(), &Vocabulaire::default());
-        assert!(notes_du_livre(&sortie).is_empty());
+        sans_section(blocs);
+    }
+
+    #[test]
+    fn un_appel_1_egare_n_ouvre_pas_de_section() {
+        // Un seul appel « 1 » sans note, puis une liste 1. 2. 3. suivie du corps : la
+        // liste et les paragraphes qui suivent restent du texte, sans recollage.
+        let mut blocs = vec![appels(&["1"])];
+        blocs.extend(liste(3));
+        blocs.push(bloc_para(vec![texte("Suite du chapitre.")], 5, 0.1));
+        blocs.push(bloc_para(vec![texte("Autre paragraphe.")], 5, 0.2));
+        sans_section(blocs);
+    }
+
+    #[test]
+    fn appels_2_et_3_sans_appel_1_n_ouvrent_pas_de_section() {
+        let mut blocs = vec![appels(&["2", "3"])];
+        blocs.extend(liste(3));
+        sans_section(blocs);
+    }
+
+    #[test]
+    fn note_3_au_8e_bloc_suivant_ouvre_la_section() {
+        // Point 1, point 2, 5 paragraphes, point 3 : le point 3 est le 8e bloc après le 1.
+        let mut blocs = vec![appels(&["1", "2", "3"])];
+        blocs.extend(liste(2));
+        blocs.extend((0..5).map(|_| bloc_para(vec![texte("suite.")], 5, 0.5)));
+        blocs.push(bloc_para(vec![texte("3. Point 3")], 6, 0.1));
+        let (sortie, _, points) = notes_regroupees(blocs, &mut Etiqueteuse::new(), &Vocabulaire::default());
+        assert!(points.is_empty(), "{points:?}");
+        let marqueurs: Vec<String> = notes_du_livre(&sortie).into_iter().map(|(_, m, _)| m).collect();
+        assert_eq!(marqueurs, ["1", "2", "3"]);
     }
 
     #[test]

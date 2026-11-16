@@ -200,7 +200,8 @@ Chacune a son test unitaire, sans PDF du corpus.
    son numéro suit le précédent ; (d) notes Calibre (n° 1) : appels et marqueurs entre
    crochets « [n] », stockés sans crochets ; section de notes implicite, sans titre
    « Notes », ouverte au paragraphe de la note 1 si les notes 2 et 3 ouvrent des
-   paragraphes dans les 8 blocs suivants et si un appel « 1 » les précède ; un « [n+1] »
+   paragraphes dans les 8 blocs suivants et si les appels « 1 », « 2 » et « 3 » les
+   précèdent ; un « [n+1] »
    collé en fin de note (« … 5e partie. [32] ») ouvre la note suivante.
 
 Défauts signalés aux revues précédentes et **non observés** sur le corpus : le motif
