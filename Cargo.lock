@@ -583,14 +583,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "plumeo-commun"
+version = "0.1.0"
+dependencies = [
+ "unicode-normalization",
+]
+
+[[package]]
 name = "plumeo-epub"
 version = "0.1.0"
 dependencies = [
+ "plumeo-commun",
  "pulldown-cmark",
  "roxmltree",
  "tempfile",
  "thiserror",
- "unicode-normalization",
  "zip",
 ]
 
@@ -600,6 +607,7 @@ version = "0.1.0"
 dependencies = [
  "image",
  "pdfium-render",
+ "plumeo-commun",
  "plumeo-epub",
  "regex",
  "serde",

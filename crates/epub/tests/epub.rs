@@ -281,11 +281,6 @@ fn liens_du_sommaire_vers_le_fichier_du_titre() {
 }
 
 #[test]
-fn ancre_titre_publique() {
-    assert_eq!(plumeo_epub::ancre_titre("1 VISITE À PATMOS"), "t-1-visite-à-patmos");
-}
-
-#[test]
 #[ignore]
 fn epubcheck() {
     let Ok(jar) = std::env::var("EPUBCHECK_JAR") else {
@@ -426,17 +421,6 @@ fn sous_titre_apres_le_sommaire_reste_en_place() {
     assert!(texte(&e, "OEBPS/chap-003.xhtml").contains(r#"<h2 id="t-achevé-d-imprimer">"#));
     let nav = texte(&e, "OEBPS/nav.xhtml");
     assert!(nav.contains(r##"<a href="chap-003.xhtml#t-achevé-d-imprimer">Achevé d'imprimer</a>"##), "{nav}");
-}
-
-#[test]
-fn est_titre_de_sommaire_public() {
-    let oui = ["Table des matières", "TABLE DES MATIÈRES", "Table des Matieres", "Sommaire", "SOMMAIRE"];
-    for oui in oui.into_iter().chain(["Sommaire :", "Tâble dès mätïères", "Table des matìères"]) {
-        assert!(plumeo_epub::est_titre_de_sommaire(oui), "« {oui} »");
-    }
-    for non in ["Table", "Sommaires et index", ""] {
-        assert!(!plumeo_epub::est_titre_de_sommaire(non), "« {non} »");
-    }
 }
 
 #[test]

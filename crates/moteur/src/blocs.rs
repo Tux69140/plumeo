@@ -43,7 +43,7 @@ pub enum Bloc {
     /// (page liminaire, colophon, fin de partie). Ancre : première ligne de la page suivante.
     Saut { ancre: Ancre },
     /// Entrée d'un sommaire imprimé : lien vers le titre d'identifiant `cible`
-    /// (voir `markdown::ancre_titre`).
+    /// (voir `plumeo_commun::ancre_titre`).
     EntreeSommaire { segments: Vec<Segment>, cible: String, ancre: Ancre },
 }
 

@@ -4,11 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+plumeo-commun = { path = "../commun" }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
 thiserror = "2"
 roxmltree = "0.21"
-unicode-normalization = "0.1"
 
 [dev-dependencies]
 tempfile = "3"

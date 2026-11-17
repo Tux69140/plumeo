@@ -1,14 +1,13 @@
 //! Lecture du Markdown interne et découpage en chapitres.
 
+use plumeo_commun::{AncresTitres, est_titre_de_sommaire};
 use pulldown_cmark::{CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-use unicode_normalization::UnicodeNormalization;
-use unicode_normalization::char::is_combining_mark;
 
 use crate::xhtml;
 
 pub struct Chapitre {
     pub titre: String,
-    /// Titres de niveau 2 : (identifiant du titre, voir `xhtml::ancre_titre`, texte).
+    /// Titres de niveau 2 : (identifiant du titre, voir `plumeo_commun::ancre_titre`, texte).
     pub sous_titres: Vec<(String, String)>,
     /// Corps XHTML (notes comprises).
     pub corps: String,
@@ -52,26 +51,6 @@ impl Brouillon {
 
 fn est_ancre(e: &Event) -> bool {
     matches!(e, Event::Html(h) if h.trim_start().starts_with("<!-- @"))
-}
-
-/// Minuscules, sans diacritiques, tout non-alphanumérique devient espace, espaces réduits.
-/// Copie exacte de `normaliser` du moteur (`titres.rs`).
-fn normaliser(s: &str) -> String {
-    let nettoye: String = s
-        .nfd()
-        .filter(|c| !is_combining_mark(*c))
-        .flat_map(char::to_lowercase)
-        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
-        .collect();
-    nettoye.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// Titre posé par le moteur sur un sommaire imprimé (`sommaire_cliquable`) : « Table des
-/// matières » ou « Sommaire », sans tenir compte de la casse, des diacritiques ni de la
-/// ponctuation (« SOMMAIRE : »). Même normalisation et même décision que le moteur
-/// (`est_titre_de_sommaire` de `titres.rs`), vérifiées par un test croisé.
-pub fn est_titre_de_sommaire(titre: &str) -> bool {
-    matches!(normaliser(titre).as_str(), "table des matieres" | "sommaire")
 }
 
 /// Lien interne vers un titre (entrée de sommaire imprimé).
@@ -149,7 +128,7 @@ pub fn decouper(markdown: &str, titre_livre: &str) -> Vec<Chapitre> {
     // Titre en cours : niveau, texte, position de son événement d'ouverture (qui reçoit
     // l'identifiant une fois le texte connu).
     let mut dans_titre: Option<(HeadingLevel, String, usize)> = None;
-    let mut ancres = xhtml::AncresTitres::default();
+    let mut ancres = AncresTitres::default();
     // Les renvois (notes, titres) sont résolus sur tout le livre avant le rendu.
     let mut renvois = xhtml::Renvois::default();
     let mut dans_note: Option<(String, Vec<Event<'static>>)> = None;
@@ -242,17 +221,4 @@ pub fn decouper(markdown: &str, titre_livre: &str) -> Vec<Chapitre> {
         renvois.recenser(i, &c.evenements, &c.notes);
     }
     chapitres.into_iter().enumerate().map(|(i, c)| c.finir(i, titre_livre, &mut renvois)).collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn normaliser_retire_diacritiques_et_ponctuation() {
-        assert_eq!(normaliser("  L’Âme,  d'été! "), "l ame d ete");
-        assert_eq!(normaliser("À Ä É È Ì Ò Õ Ù Ÿ Ç Š Ě"), "a a e e i o o u y c s e");
-        // Texte décomposé (NFD) : accents combinants retirés.
-        assert_eq!(normaliser("Matie\u{300}res :"), "matieres");
-    }
 }

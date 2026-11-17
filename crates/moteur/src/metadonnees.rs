@@ -3,11 +3,11 @@
 
 use std::sync::LazyLock;
 
+use plumeo_commun::normaliser;
 use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::modele::MetaPdf;
-use crate::titres::normaliser;
 
 static PREFIXE_NUMERO: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[\[(]?\d+[\])]?[\s_-]+").unwrap());

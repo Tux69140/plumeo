@@ -1,6 +1,6 @@
 //! Rendu XHTML : corps de chapitre, notes, pages complètes.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use pulldown_cmark::{Event, Tag, TagEnd, html::push_html};
 
@@ -66,58 +66,6 @@ fn assainir_html(html: &str) -> String {
         reste = &reste[c.len_utf8()..];
     }
     sortie
-}
-
-/// Caractère gardé dans un identifiant de titre : lettre ou chiffre qui peut figurer
-/// dans un nom XML (un exposant « ² » ne le peut pas).
-fn lettre_d_identifiant(c: char) -> bool {
-    c.is_alphanumeric()
-        && (c.is_ascii()
-            || matches!(c as u32,
-                0xC0..=0xD6 | 0xD8..=0xF6 | 0xF8..=0x2FF | 0x370..=0x37D | 0x37F..=0x1FFF
-                | 0x2070..=0x218F | 0x2C00..=0x2FEF | 0x3001..=0xD7FF | 0xF900..=0xFDCF
-                | 0xFDF0..=0xFFFD | 0x10000..=0xEFFFF))
-}
-
-/// Identifiant d'un titre : `t-` puis le texte en minuscules, chaque suite de
-/// caractères qui ne sont ni lettre ni chiffre devenant un tiret (aucun tiret en bord).
-/// Copie exacte de `plumeo_moteur::markdown::ancre_titre`, qui écrit les liens du
-/// sommaire imprimé ; un test du moteur vérifie que les deux donnent le même résultat.
-pub fn ancre_titre(texte: &str) -> String {
-    let mut sortie = String::from("t");
-    let mut tiret = true;
-    for c in texte.chars().flat_map(char::to_lowercase) {
-        if lettre_d_identifiant(c) {
-            if tiret {
-                sortie.push('-');
-                tiret = false;
-            }
-            sortie.push(c);
-        } else {
-            tiret = true;
-        }
-    }
-    sortie
-}
-
-/// Identifiants des titres du livre, dans l'ordre : un identifiant déjà pris reçoit
-/// `-2`, `-3`… (comme `plumeo_moteur::markdown::AncresTitres`).
-#[derive(Default)]
-pub struct AncresTitres {
-    pris: HashSet<String>,
-}
-
-impl AncresTitres {
-    pub fn attribuer(&mut self, texte: &str) -> String {
-        let base = ancre_titre(texte);
-        let mut id = base.clone();
-        let mut n = 1;
-        while !self.pris.insert(id.clone()) {
-            n += 1;
-            id = format!("{base}-{n}");
-        }
-        id
-    }
 }
 
 /// Nom du fichier XHTML du chapitre d'indice `i` (base 0).

@@ -9,6 +9,7 @@
 
 use std::sync::LazyLock;
 
+use plumeo_commun::normaliser;
 use regex::Regex;
 
 use crate::blocs::{Bloc, Paragraphe, Segment};
@@ -16,7 +17,6 @@ use crate::lignes::Ligne;
 use crate::modele::{Ancre, Moitie, Rect};
 use crate::paragraphes::{Vocabulaire, fin_ouverte, joindre, segments_des_lignes};
 use crate::points::{GenrePoint, PointAVerifier};
-use crate::titres::normaliser;
 use crate::zones::{Retrait, Role};
 
 /// Début de note : chiffres ou « * » suivis d'une espace, d'un point ou d'une

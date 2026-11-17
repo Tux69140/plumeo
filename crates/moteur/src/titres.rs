@@ -5,12 +5,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ops::Range;
 use std::sync::LazyLock;
 
+use plumeo_commun::{AncresTitres, est_titre_de_sommaire, normaliser};
 use regex::Regex;
-use unicode_normalization::UnicodeNormalization;
-use unicode_normalization::char::is_combining_mark;
 
 use crate::blocs::{Bloc, Paragraphe, Segment};
-use crate::markdown::AncresTitres;
 use crate::modele::{Ancre, DemiPage, Moitie, Signet, demi_page_suivante};
 use crate::paragraphes::POINTS_DE_CONDUITE_ET_NUMERO;
 use crate::points::{GenrePoint, PointAVerifier};
@@ -57,17 +55,6 @@ pub fn taille_corps(blocs: &[Bloc]) -> f32 {
         }
     }
     meilleur.map_or(0.0, |(cle, _)| cle as f32 / 2.0)
-}
-
-/// Minuscules, sans diacritiques, tout non-alphanumérique devient espace, espaces réduits.
-pub fn normaliser(s: &str) -> String {
-    let nettoye: String = s
-        .nfd()
-        .filter(|c| !is_combining_mark(*c))
-        .flat_map(char::to_lowercase)
-        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
-        .collect();
-    nettoye.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 const NOMBRES: [&str; 21] = [
@@ -1524,16 +1511,6 @@ static NUMERO_FINAL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(r"(?:[\s.\u{{2026}}]+\d{{1,4}}|\s*{POINTS_DE_CONDUITE_ET_NUMERO})\s*$")).expect("motif valide")
 });
 
-/// Titres d'un sommaire imprimé (paragraphe placé juste avant la première entrée).
-const TITRES_DE_SOMMAIRE: [&str; 2] = ["table des matieres", "sommaire"];
-
-/// Le texte est-il « Table des matières » ou « Sommaire » (casse, accents et
-/// ponctuation ignorés) ? Même décision que `plumeo_epub::est_titre_de_sommaire`,
-/// vérifiée par un test.
-fn est_titre_de_sommaire(texte: &str) -> bool {
-    TITRES_DE_SOMMAIRE.contains(&normaliser(texte).as_str())
-}
-
 /// Le bloc est-il un paragraphe « Table des matières » ou « Sommaire » ?
 fn titre_de_sommaire(bloc: &Bloc) -> bool {
     matches!(bloc, Bloc::Paragraphe(p) if est_titre_de_sommaire(&p.texte_brut()))
@@ -1849,7 +1826,7 @@ fn joindre_a_l_entree(entree: &mut Paragraphe, mut suite: Paragraphe) {
 
 /// Transformation des blocs selon les sommaires `reconnus` : leurs titres deviennent des
 /// titres de niveau 1, et chaque entrée une seule `EntreeSommaire` (cible : identifiant du
-/// titre visé, voir `markdown::ancre_titre`), ancrée à son premier paragraphe.
+/// titre visé, voir `plumeo_commun::ancre_titre`), ancrée à son premier paragraphe.
 fn lier_les_entrees(mut blocs: Vec<Bloc>, reconnus: &SommairesReconnus) -> Vec<Bloc> {
     for &j in &reconnus.titres_de_sommaire {
         if let Bloc::Paragraphe(p) = &blocs[j] {
@@ -2585,50 +2562,6 @@ mod tests {
     }
 
     #[test]
-    fn normaliser_retire_diacritiques_et_ponctuation() {
-        assert_eq!(normaliser("  L’Âme,  d'été! "), "l ame d ete");
-    }
-
-    #[test]
-    fn titre_de_sommaire_identique_dans_le_moteur_et_l_epub() {
-        for (texte, attendu) in [
-            ("Table des matières", true),
-            ("TABLE DES MATIÈRES", true),
-            ("Table des Matieres", true),
-            ("Sommaire", true),
-            ("SOMMAIRE", true),
-            ("Sommaire :", true),
-            ("Table", false),
-            ("Sommaires et index", false),
-        ] {
-            assert_eq!(est_titre_de_sommaire(texte), attendu, "moteur : « {texte} »");
-            assert_eq!(plumeo_epub::est_titre_de_sommaire(texte), attendu, "EPUB : « {texte} »");
-        }
-    }
-
-    /// Chaque caractère latin étendu (U+00C0–U+024F, U+1E00–U+1EFF) mis à la place de
-    /// chaque lettre de « table des matieres » et de « sommaire » : même décision des deux côtés.
-    #[test]
-    fn titre_de_sommaire_identique_pour_tout_caractere_latin_substitue() {
-        let mut ecarts = Vec::new();
-        for base in ["table des matieres", "sommaire"] {
-            let lettres: Vec<char> = base.chars().collect();
-            let latins = ('\u{c0}'..='\u{24f}').chain('\u{1e00}'..='\u{1eff}');
-            for c in latins {
-                for i in (0..lettres.len()).filter(|&i| lettres[i] != ' ') {
-                    let mut l = lettres.clone();
-                    l[i] = c;
-                    let texte: String = l.into_iter().collect();
-                    if est_titre_de_sommaire(&texte) != plumeo_epub::est_titre_de_sommaire(&texte) {
-                        ecarts.push(texte);
-                    }
-                }
-            }
-        }
-        assert!(ecarts.is_empty(), "{} écarts, dont {:?}", ecarts.len(), &ecarts[..ecarts.len().min(10)]);
-    }
-
-    #[test]
     fn taille_corps_pondere_par_caracteres() {
         let blocs = vec![para(1, "court", 18.0, false, 1), corps(1, &texte_long()), para(1, "x", 12.2, false, 1)];
         assert_eq!(taille_corps(&blocs), 12.0);
@@ -3158,7 +3091,7 @@ mod tests {
     }
 
     fn lien(texte: &str, titre: &str) -> String {
-        format!("[{texte}](#{})", crate::markdown::ancre_titre(titre))
+        format!("[{texte}](#{})", plumeo_commun::ancre_titre(titre))
     }
 
     #[test]
@@ -3502,7 +3435,7 @@ mod tests {
             p.segments = segments;
         }
         let (blocs, _, _) = sommaire_cliquable(livre, "Mon livre");
-        let cible = format!("](#{})", crate::markdown::ancre_titre(titre));
+        let cible = format!("](#{})", plumeo_commun::ancre_titre(titre));
         rendu_sommaire(&blocs).into_iter().find(|r| r.ends_with(&cible)).expect("entrée liée")
     }
 

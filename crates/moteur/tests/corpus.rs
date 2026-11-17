@@ -12,13 +12,13 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Instant;
 
-use plumeo_epub::{Metadonnees, est_titre_de_sommaire, generer_epub};
+use plumeo_commun::{est_titre_de_sommaire, normaliser};
+use plumeo_epub::{Metadonnees, generer_epub};
 use plumeo_moteur::convertir_livre;
 use plumeo_moteur::metadonnees::proposer;
 use plumeo_moteur::modele::{Ancre, Moitie};
 use plumeo_moteur::pdf::{DocumentPdf, nettoyer_chaine};
 use plumeo_moteur::reglages::{ReglagesSerie, SourceTitres, Zones};
-use plumeo_moteur::titres::normaliser;
 use plumeo_moteur::zones::est_numero_page;
 use regex::Regex;
 use serde::Deserialize;
@@ -296,7 +296,7 @@ fn compter_liens(chapitres: &[(String, String)]) -> usize {
 }
 
 /// Vérifie que le chapitre « Table des matières » ou « Sommaire » (titre H1, à la casse,
-/// aux accents et à la ponctuation près : `plumeo_epub::est_titre_de_sommaire`) qui
+/// aux accents et à la ponctuation près : `plumeo_commun::est_titre_de_sommaire`) qui
 /// contient des liens internes est `chap-002.xhtml`, juste après la page de titre. Si
 /// `attendu`, l'EPUB doit en plus avoir un tel chapitre : le contrôle ne passe pas à vide.
 /// Sinon, sans chapitre de ce genre, rien à vérifier.

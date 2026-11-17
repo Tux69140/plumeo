@@ -4,9 +4,6 @@ mod xhtml;
 
 use std::path::Path;
 
-pub use chapitres::est_titre_de_sommaire;
-pub use xhtml::ancre_titre;
-
 pub struct Metadonnees {
     pub titre: String,
     pub auteur: String,

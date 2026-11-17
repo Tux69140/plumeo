@@ -270,27 +270,6 @@ fn titre_du_livre_introuvable_insere_page_1() {
 }
 
 #[test]
-fn ancre_titre_identique_dans_le_moteur_et_l_epub() {
-    for titre in [
-        "1 VISITE À PATMOS",
-        "I. La pierre cubique",
-        "V. L'avènement de la Nouvelle Jérusalem",
-        "  L’Archange : « Mikhaël » !  ",
-        "LES 144.000 SERVITEURS DE DIEU",
-        "E = mc²",
-        "Ⅳ ① İstanbul ǅ ß",
-        "",
-        "…",
-    ] {
-        assert_eq!(
-            plumeo_moteur::markdown::ancre_titre(titre),
-            plumeo_epub::ancre_titre(titre),
-            "« {titre} »"
-        );
-    }
-}
-
-#[test]
 fn sommaire_imprime_cliquable_jusque_dans_l_epub() {
     use std::io::Read;
     let titre = |y: f32, texte: &'static str| t(y, texte, 20.0, StyleFixture::Gras);

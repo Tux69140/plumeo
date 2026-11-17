@@ -13,6 +13,8 @@ chapitre, table des matières, notes surgissantes avec lien retour.
 - `crates/moteur` (`plumeo-moteur`) : lecture du PDF (pdfium), zones, paragraphes,
   titres, notes, écriture du Markdown interne.
 - `crates/epub` (`plumeo-epub`) : du Markdown interne à l'EPUB 3.
+- `crates/commun` (`plumeo-commun`) : conventions partagées par le moteur et l'EPUB
+  (normalisation du texte, identifiants des titres, titre d'un sommaire imprimé).
 - `crates/cli` (`plumeo-cli`) : la ligne de commande.
 
 ## Prérequis
