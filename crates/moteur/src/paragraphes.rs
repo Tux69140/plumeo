@@ -278,12 +278,11 @@ fn ajouter_texte(segments: &mut Vec<Segment>, texte: &str, gras: bool, italique:
     if texte.is_empty() {
         return;
     }
-    if let Some(Segment::Texte { texte: t, gras: g, italique: i }) = segments.last_mut() {
-        if *g == gras && *i == italique {
+    if let Some(Segment::Texte { texte: t, gras: g, italique: i }) = segments.last_mut()
+        && *g == gras && *i == italique {
             t.push_str(texte);
             return;
         }
-    }
     segments.push(Segment::Texte { texte: texte.to_string(), gras, italique });
 }
 

@@ -700,8 +700,7 @@ fn chercher_signet(
             let mut mots = 0;
             let mut lignes = 0;
             let mut fin = debut;
-            loop {
-                let Bloc::Paragraphe(p) = &blocs[fin] else { break };
+            while let Bloc::Paragraphe(p) = &blocs[fin] {
                 let (texte, norm_bloc, mots_bloc) = index.paragraphes[fin].as_ref().expect("paragraphe indexé");
                 textes.push(texte);
                 // Le texte normalisé d'une suite de paragraphes est la suite de leurs
@@ -921,8 +920,7 @@ fn fusionner_titres_consecutifs(blocs: Vec<Bloc>, proteges: &HashSet<usize>) -> 
             Bloc::Titre { niveau, texte, ancre },
             Some(Bloc::Titre { niveau: n0, texte: t0, ancre: a0 }),
         ) = (&bloc, resultat.last_mut())
-        {
-            if niveau == n0
+            && niveau == n0
                 && ancre.page == a0.page
                 && ancre.moitie == a0.moitie
                 && !est_date(texte)
@@ -934,7 +932,6 @@ fn fusionner_titres_consecutifs(blocs: Vec<Bloc>, proteges: &HashSet<usize>) -> 
                 t0.push_str(texte);
                 continue;
             }
-        }
         resultat.push(bloc);
         dernier_protege = protege;
     }

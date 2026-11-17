@@ -99,10 +99,8 @@ pub fn ecrire(
     ajouter("OEBPS/style.css", comprime, CSS.as_bytes())?;
     if let Some(png) = couverture_png {
         ajouter("OEBPS/images/couverture.png", comprime, png)?;
-        let corps = format!(
-            "<div class=\"couverture\"><img src=\"images/couverture.png\" alt=\"Couverture\" /></div>\n"
-        );
-        ajouter("OEBPS/couverture.xhtml", comprime, page(&meta.langue, &meta.titre, &corps).as_bytes())?;
+        let corps = "<div class=\"couverture\"><img src=\"images/couverture.png\" alt=\"Couverture\" /></div>\n";
+        ajouter("OEBPS/couverture.xhtml", comprime, page(&meta.langue, &meta.titre, corps).as_bytes())?;
     }
     for (i, c) in chapitres.iter().enumerate() {
         let xml = page(&meta.langue, &c.titre, &c.corps);

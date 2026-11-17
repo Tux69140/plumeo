@@ -79,9 +79,9 @@ pub fn fusionner_appels_orphelins(evenements: Vec<Event<'static>>) -> Vec<Event<
     let mut sortie: Vec<Event<'static>> = Vec::new();
     let mut it = evenements.into_iter().peekable();
     while let Some(e) = it.next() {
-        if matches!(&e, Event::Text(t) if &**t == "[") {
-            if let Some(Event::Text(m)) = it.peek() {
-                if m.len() > 1 && m.starts_with('^') {
+        if matches!(&e, Event::Text(t) if &**t == "[")
+            && let Some(Event::Text(m)) = it.peek()
+                && m.len() > 1 && m.starts_with('^') {
                     let m = m.clone();
                     let mut copie = it.clone();
                     copie.next();
@@ -92,8 +92,6 @@ pub fn fusionner_appels_orphelins(evenements: Vec<Event<'static>>) -> Vec<Event<
                         continue;
                     }
                 }
-            }
-        }
         sortie.push(e);
     }
     sortie

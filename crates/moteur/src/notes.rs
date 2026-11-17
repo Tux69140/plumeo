@@ -536,15 +536,14 @@ pub fn notes_regroupees(
     for bloc in &sortie {
         if let Bloc::Paragraphe(p) = bloc {
             for s in &p.segments {
-                if let Segment::Exposant(m) = s {
-                    if APPEL.is_match(m) {
+                if let Segment::Exposant(m) = s
+                    && APPEL.is_match(m) {
                         points.push(PointAVerifier {
                             ancre: p.ancre,
                             genre: GenrePoint::NoteOrpheline,
                             message: format!("Appel de note « {m} » sans note correspondante"),
                         });
                     }
-                }
             }
         }
     }

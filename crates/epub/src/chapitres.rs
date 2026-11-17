@@ -187,11 +187,10 @@ pub fn decouper(markdown: &str, titre_livre: &str) -> Vec<Chapitre> {
                 courant.evenements.push(Event::End(TagEnd::Heading(niveau)));
             }
             e => {
-                if let Some((_, texte, _)) = dans_titre.as_mut() {
-                    if let Event::Text(t) | Event::Code(t) = &e {
+                if let Some((_, texte, _)) = dans_titre.as_mut()
+                    && let Event::Text(t) | Event::Code(t) = &e {
                         texte.push_str(t);
                     }
-                }
                 if !matches!(
                     &e,
                     Event::SoftBreak

@@ -67,7 +67,7 @@ impl ReglagesSerie {
         let paire = match moitie {
             Moitie::Gauche => true,
             Moitie::Droite => false,
-            Moitie::Entiere => page % 2 == 0,
+            Moitie::Entiere => page.is_multiple_of(2),
         };
         if paire { &self.paire } else { &self.impaire }
     }
