@@ -24,8 +24,7 @@ use crate::zones::{Retrait, Role};
 static DEBUT_NOTE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(?:(\d{1,3}|\*{1,3})[\s.)]|\[(\d{1,3})\](?:\s|$))").unwrap());
 /// Appel de note en exposant : « 3 », « * » ou « [3] ».
-static APPEL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:(\d{1,3}|\*{1,3})|\[(\d{1,3})\])$").unwrap());
+static APPEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:(\d{1,3}|\*{1,3})|\[(\d{1,3})\])$").unwrap());
 
 /// Marqueur d'un appel de note en exposant, sans crochets.
 fn marqueur_d_appel(texte: &str) -> Option<String> {
@@ -84,10 +83,9 @@ impl NoteEnAttente {
     /// Bloc final : `Note` si appariée, sinon paragraphe « marqueur texte » et point.
     fn en_bloc(self) -> (Bloc, Option<PointAVerifier>) {
         match self.etiquette {
-            Some(etiquette) => (
-                Bloc::Note { etiquette, marqueur: self.marqueur, segments: self.segments, ancre: self.ancre },
-                None,
-            ),
+            Some(etiquette) => {
+                (Bloc::Note { etiquette, marqueur: self.marqueur, segments: self.segments, ancre: self.ancre }, None)
+            }
             None => {
                 let mut segments = self.segments;
                 if !self.marqueur.is_empty() {
@@ -142,10 +140,7 @@ fn fin_d_appel(c: &[char], k: usize) -> Option<usize> {
 /// Appelle `apparier` pour chaque appel de note des segments (exposant, « * » ou
 /// chiffres collés : voir `fin_d_appel`) ; s'il renvoie une étiquette, l'appel
 /// devient `AppelNote`. Sans note correspondante, le texte reste inchangé.
-fn convertir_appels(
-    segments: Vec<Segment>,
-    apparier: &mut impl FnMut(&str) -> Option<String>,
-) -> Vec<Segment> {
+fn convertir_appels(segments: Vec<Segment>, apparier: &mut impl FnMut(&str) -> Option<String>) -> Vec<Segment> {
     let mut sortie = Vec::new();
     for segment in segments {
         match segment {
@@ -399,8 +394,7 @@ fn ouvre_section_implicite(blocs: &[Bloc], i: usize, portee: &[Bloc]) -> bool {
         return false;
     }
     let suivants = &blocs[i + 1..blocs.len().min(i + 1 + PORTEE_SECTION_IMPLICITE)];
-    ["2", "3"].iter().all(|n| suivants.iter().any(|b| ouvre_la_note(b, n)))
-        && toutes_appelees(portee, &["1", "2", "3"])
+    ["2", "3"].iter().all(|n| suivants.iter().any(|b| ouvre_la_note(b, n))) && toutes_appelees(portee, &["1", "2", "3"])
 }
 
 /// La (demi-)page `page` porte-t-elle un paragraphe qui ouvre une note, parmi `blocs` ?
@@ -481,10 +475,7 @@ pub fn notes_regroupees(
                 // Section implicite : un paragraphe sans marqueur ne continue la note que
                 // si elle est encore vide (marqueur seul) ou si elle reste ouverte en bas
                 // de (demi-)page et qu'il ouvre la suivante. Sinon la section s'arrête là.
-                if implicite
-                    && !note.segments.is_empty()
-                    && !(derniere != Some(page) && fin_ouverte(&note.segments))
-                {
+                if implicite && !note.segments.is_empty() && !(derniere != Some(page) && fin_ouverte(&note.segments)) {
                     fin = j;
                     break;
                 }
@@ -511,9 +502,8 @@ pub fn notes_regroupees(
 
         for bloc in &mut sortie[debut_portee..] {
             if let Bloc::Paragraphe(p) = bloc {
-                p.segments = convertir_appels(std::mem::take(&mut p.segments), &mut |m| {
-                    apparier_avec(&mut notes, et, m)
-                });
+                p.segments =
+                    convertir_appels(std::mem::take(&mut p.segments), &mut |m| apparier_avec(&mut notes, et, m));
             }
         }
 
@@ -537,13 +527,14 @@ pub fn notes_regroupees(
         if let Bloc::Paragraphe(p) = bloc {
             for s in &p.segments {
                 if let Segment::Exposant(m) = s
-                    && APPEL.is_match(m) {
-                        points.push(PointAVerifier {
-                            ancre: p.ancre,
-                            genre: GenrePoint::NoteOrpheline,
-                            message: format!("Appel de note « {m} » sans note correspondante"),
-                        });
-                    }
+                    && APPEL.is_match(m)
+                {
+                    points.push(PointAVerifier {
+                        ancre: p.ancre,
+                        genre: GenrePoint::NoteOrpheline,
+                        message: format!("Appel de note « {m} » sans note correspondante"),
+                    });
+                }
             }
         }
     }
@@ -567,14 +558,8 @@ mod tests {
     }
 
     fn ligne(texte: &str, y0: f32) -> Ligne {
-        let mots: Vec<Mot> =
-            texte.split(' ').enumerate().map(|(i, t)| mot(t, 0.1 + 0.06 * i as f32, y0)).collect();
-        let rect = Rect {
-            x0: mots[0].rect.x0,
-            y0,
-            x1: mots.last().unwrap().rect.x1,
-            y1: y0 + 0.02,
-        };
+        let mots: Vec<Mot> = texte.split(' ').enumerate().map(|(i, t)| mot(t, 0.1 + 0.06 * i as f32, y0)).collect();
+        let rect = Rect { x0: mots[0].rect.x0, y0, x1: mots.last().unwrap().rect.x1, y1: y0 + 0.02 };
         Ligne { mots, exposants: vec![], rect }
     }
 
@@ -624,8 +609,14 @@ mod tests {
     fn note_etoile_appariee() {
         let mut et = Etiqueteuse::new();
         let p = para(vec![texte("Un mot"), Segment::Exposant("*".into())], 3, 0.2);
-        let (blocs, points) =
-            notes_bas_de_page(vec![p], &[ligne("* Lire la conférence", 0.9)], 3, Moitie::Entiere, &mut et, &Vocabulaire::default());
+        let (blocs, points) = notes_bas_de_page(
+            vec![p],
+            &[ligne("* Lire la conférence", 0.9)],
+            3,
+            Moitie::Entiere,
+            &mut et,
+            &Vocabulaire::default(),
+        );
         assert!(points.is_empty());
         assert_eq!(blocs.len(), 2);
         let Bloc::Paragraphe(p) = &blocs[0] else { panic!() };
@@ -640,8 +631,14 @@ mod tests {
     fn appel_etoile_colle_au_mot() {
         let mut et = Etiqueteuse::new();
         let p = para(vec![texte("un double* mot")], 3, 0.2);
-        let (blocs, points) =
-            notes_bas_de_page(vec![p], &[ligne("* Une précision", 0.9)], 3, Moitie::Entiere, &mut et, &Vocabulaire::default());
+        let (blocs, points) = notes_bas_de_page(
+            vec![p],
+            &[ligne("* Une précision", 0.9)],
+            3,
+            Moitie::Entiere,
+            &mut et,
+            &Vocabulaire::default(),
+        );
         assert!(points.is_empty());
         let Bloc::Paragraphe(p) = &blocs[0] else { panic!() };
         assert_eq!(
@@ -660,8 +657,14 @@ mod tests {
         // Scan OCR : l'appel « * » suit un point, séparé par une espace.
         let mut et = Etiqueteuse::new();
         let p = para(vec![texte("le corps éthérique. * Le corps")], 36, 0.2);
-        let (blocs, points) =
-            notes_bas_de_page(vec![p], &[ligne("* Lire la conférence", 0.9)], 36, Moitie::Entiere, &mut et, &Vocabulaire::default());
+        let (blocs, points) = notes_bas_de_page(
+            vec![p],
+            &[ligne("* Lire la conférence", 0.9)],
+            36,
+            Moitie::Entiere,
+            &mut et,
+            &Vocabulaire::default(),
+        );
         assert!(points.is_empty());
         let Bloc::Paragraphe(p) = &blocs[0] else { panic!() };
         assert_eq!(
@@ -760,7 +763,8 @@ mod tests {
         let mut et = Etiqueteuse::new();
         let p1 = para(vec![texte("1. Premier point")], 2, 0.2);
         let p2 = para(vec![texte("2. Second point")], 2, 0.3);
-        let (blocs, points) = notes_bas_de_page(vec![p1, p2], &[], 2, Moitie::Entiere, &mut et, &Vocabulaire::default());
+        let (blocs, points) =
+            notes_bas_de_page(vec![p1, p2], &[], 2, Moitie::Entiere, &mut et, &Vocabulaire::default());
         assert!(points.is_empty());
         assert_eq!(blocs.len(), 2);
         assert!(blocs.iter().all(|b| matches!(b, Bloc::Paragraphe(_))));
@@ -902,7 +906,11 @@ mod tests {
 
         // La note suivante peut aussi arriver dans un paragraphe de suite (retrait suspendu).
         let blocs = vec![
-            bloc_para(vec![texte("Wolff"), Segment::Exposant("3".into()), texte(" et Hume"), Segment::Exposant("4".into())], 1, 0.2),
+            bloc_para(
+                vec![texte("Wolff"), Segment::Exposant("3".into()), texte(" et Hume"), Segment::Exposant("4".into())],
+                1,
+                0.2,
+            ),
             titre("Notes", 2, 2),
             bloc_para(vec![texte("3. Christian Wolff, «Philosophia rationalis sive")], 2, 0.2),
             bloc_para(vec![texte("logica» 1728. 4. David Hume, 1739.")], 2, 0.3),
@@ -1004,8 +1012,7 @@ mod tests {
 
     /// Paragraphe du corps portant les appels en exposant `marqueurs`.
     fn appels(marqueurs: &[&str]) -> Bloc {
-        let segments =
-            marqueurs.iter().flat_map(|m| [texte(" mot"), Segment::Exposant((*m).into())]).collect();
+        let segments = marqueurs.iter().flat_map(|m| [texte(" mot"), Segment::Exposant((*m).into())]).collect();
         bloc_para(segments, 1, 0.2)
     }
 
@@ -1182,12 +1189,8 @@ mod tests {
         // son ancre.
         let mut blocs = vec![appels(&["1", "2", "3"])];
         blocs.extend((1..=29).map(|k| bloc_droite(&format!("{k} Ouvrage {k} (1904). (T)"), 95, 0.1 + 0.02 * k as f32)));
-        let corps = [
-            "C'est ainsi que la pensée abstraite",
-            "devient vivante.",
-            "R. Steiner",
-            "La Philosophie de la Liberté",
-        ];
+        let corps =
+            ["C'est ainsi que la pensée abstraite", "devient vivante.", "R. Steiner", "La Philosophie de la Liberté"];
         blocs.extend(corps.iter().enumerate().map(|(k, t)| bloc_droite(t, 96, 0.2 + 0.1 * k as f32)));
         let attendu = paragraphes(&blocs[30..]);
         let (sortie, _, _) = notes_regroupees(blocs, &mut Etiqueteuse::new(), &Vocabulaire::default());
@@ -1242,8 +1245,14 @@ mod tests {
     fn note_en_bas_de_page_entre_crochets() {
         let mut et = Etiqueteuse::new();
         let p = para(vec![texte("Mot"), Segment::Exposant("[4]".into())], 2, 0.2);
-        let (blocs, points) =
-            notes_bas_de_page(vec![p], &[ligne("[4] Voir plus loin", 0.9)], 2, Moitie::Entiere, &mut et, &Vocabulaire::default());
+        let (blocs, points) = notes_bas_de_page(
+            vec![p],
+            &[ligne("[4] Voir plus loin", 0.9)],
+            2,
+            Moitie::Entiere,
+            &mut et,
+            &Vocabulaire::default(),
+        );
         assert!(points.is_empty());
         let Bloc::Paragraphe(p) = &blocs[0] else { panic!() };
         assert_eq!(p.segments[1], Segment::AppelNote { etiquette: "1-4".into(), marqueur: "4".into() });

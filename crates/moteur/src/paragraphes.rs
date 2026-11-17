@@ -45,10 +45,7 @@ pub fn mesurer_bloc(pages: &[Vec<Ligne>]) -> BlocTexte {
     let x0 = mediane(retenues.iter().map(min).collect());
     let x1 = mediane(retenues.iter().map(max).collect());
     let y1 = mediane(retenues.iter().map(|p| bas(p)).collect());
-    let ecarts: Vec<f32> = pages
-        .iter()
-        .flat_map(|p| p.windows(2).map(|w| w[1].rect.y0 - w[0].rect.y0))
-        .collect();
+    let ecarts: Vec<f32> = pages.iter().flat_map(|p| p.windows(2).map(|w| w[1].rect.y0 - w[0].rect.y0)).collect();
     BlocTexte { x0, x1, y1, interligne: mediane(ecarts) }
 }
 
@@ -97,8 +94,7 @@ enum Enumeration {
     Romains,
 }
 
-static ENUMERATION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:(\d{1,3})|([IVXLC]{1,6}))\.\s").unwrap());
+static ENUMERATION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:(\d{1,3})|([IVXLC]{1,6}))\.\s").unwrap());
 
 /// Genre de l'énumération par laquelle commence le texte, s'il y en a une.
 fn enumeration(texte: &str) -> Option<Enumeration> {
@@ -258,7 +254,8 @@ impl Vocabulaire {
             return None;
         }
         let tete = &avant[..avant.len() - avant.chars().last().map_or(0, char::len_utf8)];
-        let gauche: String = tete.chars().rev().take_while(|c| c.is_alphabetic()).collect::<Vec<_>>().into_iter().rev().collect();
+        let gauche: String =
+            tete.chars().rev().take_while(|c| c.is_alphabetic()).collect::<Vec<_>>().into_iter().rev().collect();
         let gauche = gauche.to_lowercase();
         let droite: String = suite.chars().take_while(|c| c.is_alphabetic()).collect::<String>().to_lowercase();
         if self.mots.contains(&format!("{gauche}{droite}")) {
@@ -279,10 +276,12 @@ fn ajouter_texte(segments: &mut Vec<Segment>, texte: &str, gras: bool, italique:
         return;
     }
     if let Some(Segment::Texte { texte: t, gras: g, italique: i }) = segments.last_mut()
-        && *g == gras && *i == italique {
-            t.push_str(texte);
-            return;
-        }
+        && *g == gras
+        && *i == italique
+    {
+        t.push_str(texte);
+        return;
+    }
     segments.push(Segment::Texte { texte: texte.to_string(), gras, italique });
 }
 
@@ -562,11 +561,7 @@ mod tests {
 
     #[test]
     fn fin_de_paragraphe_par_blanc_a_droite() {
-        let lignes = vec![
-            ligne("un", 0.1, 0.9, 0.10),
-            ligne("deux", 0.1, 0.66, 0.13),
-            ligne("trois", 0.1, 0.9, 0.16),
-        ];
+        let lignes = vec![ligne("un", 0.1, 0.9, 0.10), ligne("deux", 0.1, 0.66, 0.13), ligne("trois", 0.1, 0.9, 0.16)];
         let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC, &Vocabulaire::default());
         assert_eq!(textes(&p), vec!["un deux", "trois"]);
         assert_eq!(p[0].nb_lignes, 2);
@@ -581,10 +576,7 @@ mod tests {
 
     #[test]
     fn alinea() {
-        let lignes = vec![
-            ligne("un", 0.1, 0.9, 0.10),
-            ligne("deux", 0.1 + 0.05 * 0.8, 0.9, 0.13),
-        ];
+        let lignes = vec![ligne("un", 0.1, 0.9, 0.10), ligne("deux", 0.1 + 0.05 * 0.8, 0.9, 0.13)];
         let p = paragraphes_page(&lignes, 1, Moitie::Entiere, BLOC, &Vocabulaire::default());
         assert_eq!(p.len(), 2);
     }
@@ -698,7 +690,7 @@ mod tests {
                 Segment::Exposant("er".into()),
             ]
         );
-        assert_eq!(p[0].texte_brut(), "un beau jour rouge" .to_string() + "er");
+        assert_eq!(p[0].texte_brut(), "un beau jour rouge".to_string() + "er");
     }
 
     #[test]
@@ -767,27 +759,42 @@ mod tests {
             en("Table des matières", 3, Moitie::Droite, 0.1),
         ];
         let r = raccorder_pages(blocs, &Vocabulaire::default(), &sommaire, &HashSet::new());
-        assert_eq!(r.iter().map(texte_de).collect::<Vec<_>>(), ["ce que l'on dit", "et la suite", "Table des matières"]);
+        assert_eq!(
+            r.iter().map(texte_de).collect::<Vec<_>>(),
+            ["ce que l'on dit", "et la suite", "Table des matières"]
+        );
     }
 
     #[test]
     fn raccord_ignore_l_appel_de_note_final() {
-        let r = raccorder_pages(vec![para_avec_fin("la fin.", appel()), para("Suite", 5, 0.1)], &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new());
+        let r = raccorder_pages(
+            vec![para_avec_fin("la fin.", appel()), para("Suite", 5, 0.1)],
+            &Vocabulaire::default(),
+            &BTreeSet::new(),
+            &HashSet::new(),
+        );
         assert_eq!(r.len(), 2);
     }
 
     #[test]
     fn raccord_ignore_l_exposant_final() {
-        let r = raccorder_pages(vec![
-            para_avec_fin("la fin.", Segment::Exposant("1".into())),
-            para("Suite", 5, 0.1),
-        ], &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new());
+        let r = raccorder_pages(
+            vec![para_avec_fin("la fin.", Segment::Exposant("1".into())), para("Suite", 5, 0.1)],
+            &Vocabulaire::default(),
+            &BTreeSet::new(),
+            &HashSet::new(),
+        );
         assert_eq!(r.len(), 2);
     }
 
     #[test]
     fn raccord_malgre_un_appel_de_note_apres_un_mot() {
-        let r = raccorder_pages(vec![para_avec_fin("ce que", appel()), para("l'on dit", 5, 0.1)], &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new());
+        let r = raccorder_pages(
+            vec![para_avec_fin("ce que", appel()), para("l'on dit", 5, 0.1)],
+            &Vocabulaire::default(),
+            &BTreeSet::new(),
+            &HashSet::new(),
+        );
         assert_eq!(r.len(), 1);
         assert_eq!(texte_de(&r[0]), "ce que1 l'on dit");
     }
@@ -804,9 +811,15 @@ mod tests {
         let r = raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new());
         assert_eq!(texte_de(&r[0]), "merveilleux");
         let blocs = vec![para("dites-", 4, 0.8), para("vous bien", 5, 0.1)];
-        assert_eq!(texte_de(&raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new())[0]), "dites-vous bien");
+        assert_eq!(
+            texte_de(&raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new())[0]),
+            "dites-vous bien"
+        );
         let blocs = vec![para("le Saint-", 4, 0.8), para("Esprit", 5, 0.1)];
-        assert_eq!(texte_de(&raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new())[0]), "le Saint-Esprit");
+        assert_eq!(
+            texte_de(&raccorder_pages(blocs, &Vocabulaire::default(), &BTreeSet::new(), &HashSet::new())[0]),
+            "le Saint-Esprit"
+        );
     }
 
     /// Lignes pleines (sans blanc de fin de paragraphe) aux hauteurs données.
@@ -818,10 +831,22 @@ mod tests {
     fn entrees_numerotees_jamais_fusionnees() {
         let v = Vocabulaire::default();
         // Sommaire à interligne normal et lignes pleines : chaque entrée reste seule.
-        let p = paragraphes_page(&lignes_pleines(&["7. La porte", "8. Le fleuve", "13. La cité", "14. La fin"]), 5, Moitie::Entiere, BLOC, &v);
+        let p = paragraphes_page(
+            &lignes_pleines(&["7. La porte", "8. Le fleuve", "13. La cité", "14. La fin"]),
+            5,
+            Moitie::Entiere,
+            BLOC,
+            &v,
+        );
         assert_eq!(textes(&p), vec!["7. La porte", "8. Le fleuve", "13. La cité", "14. La fin"]);
         // Chiffres romains, avec une entrée sur deux lignes.
-        let p = paragraphes_page(&lignes_pleines(&["III. La pierre", "angulaire", "IV. Le fleuve"]), 5, Moitie::Entiere, BLOC, &v);
+        let p = paragraphes_page(
+            &lignes_pleines(&["III. La pierre", "angulaire", "IV. Le fleuve"]),
+            5,
+            Moitie::Entiere,
+            BLOC,
+            &v,
+        );
         assert_eq!(textes(&p), vec!["III. La pierre angulaire", "IV. Le fleuve"]);
     }
 
@@ -977,10 +1002,8 @@ mod tests {
             x += 0.08;
         }
         mots.push(mot("7", 0.88, 0.9, 0.10, 12.0, false, false));
-        let lignes = vec![
-            ligne_de_mots(mots),
-            ligne_reguliere("Les bases d'une théorie de la connaissance", 0.1, 0.9, 0.13),
-        ];
+        let lignes =
+            vec![ligne_de_mots(mots), ligne_reguliere("Les bases d'une théorie de la connaissance", 0.1, 0.9, 0.13)];
         assert!(ligne_entree(&lignes[0], BLOC));
         let p = paragraphes_page(&lignes, 3, Moitie::Droite, BLOC, &Vocabulaire::default());
         assert_eq!(p.len(), 2);
@@ -1082,9 +1105,7 @@ mod tests {
 
     #[test]
     fn mesure_du_bloc() {
-        let page: Vec<Ligne> = (0..10)
-            .map(|i| ligne("x", 0.12, 0.88, 0.1 + 0.03 * i as f32))
-            .collect();
+        let page: Vec<Ligne> = (0..10).map(|i| ligne("x", 0.12, 0.88, 0.1 + 0.03 * i as f32)).collect();
         let court = vec![ligne("x", 0.0, 0.5, 0.1)];
         let b = mesurer_bloc(&[page, court]);
         assert!((b.x0 - 0.12).abs() < 1e-6);

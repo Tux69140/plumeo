@@ -99,10 +99,7 @@ fn convertir(
     let debut = Instant::now();
     let reglages = ReglagesSerie::lire(serie)?;
     let doc = DocumentPdf::ouvrir(chemin)?;
-    let nom_fichier: String = chemin
-        .file_stem()
-        .map(|s| s.to_string_lossy().nfc().collect())
-        .unwrap_or_default();
+    let nom_fichier: String = chemin.file_stem().map(|s| s.to_string_lossy().nfc().collect()).unwrap_or_default();
     let (titre_propose, auteur_propose) = proposer(&doc.meta(), &nom_fichier);
     let titre = nettoyer_chaine(&titre.unwrap_or(titre_propose));
     let auteur = nettoyer_chaine(&auteur.unwrap_or(auteur_propose));
@@ -117,10 +114,7 @@ fn convertir(
         titre: titre.clone(),
         auteur: auteur.clone(),
         langue: langue_epub(&reglages.langue),
-        identifiant: format!(
-            "urn:uuid:{}",
-            Uuid::new_v5(&Uuid::NAMESPACE_URL, nom_fichier.as_bytes())
-        ),
+        identifiant: format!("urn:uuid:{}", Uuid::new_v5(&Uuid::NAMESPACE_URL, nom_fichier.as_bytes())),
         modifie: maintenant_utc(),
     };
 
@@ -187,12 +181,7 @@ fn formater_utc(secondes: u64) -> String {
     let jour = jda - (153 * mp + 2) / 5 + 1;
     let mois = if mp < 10 { mp + 3 } else { mp - 9 };
     let annee = ae + ere * 400 + i64::from(mois <= 2);
-    format!(
-        "{annee:04}-{mois:02}-{jour:02}T{:02}:{:02}:{:02}Z",
-        reste / 3600,
-        reste % 3600 / 60,
-        reste % 60
-    )
+    format!("{annee:04}-{mois:02}-{jour:02}T{:02}:{:02}:{:02}Z", reste / 3600, reste % 3600 / 60, reste % 60)
 }
 
 #[cfg(test)]

@@ -32,7 +32,11 @@ fn corps(y: f32, texte: &'static str) -> TexteFixture {
 
 #[test]
 fn livre_de_trois_pages() {
-    let p1 = [en_tete(), t(100.0, "CHAPITRE UN", 20.0, StyleFixture::Gras), corps(200.0, "Premier paragraphe de la page un.")];
+    let p1 = [
+        en_tete(),
+        t(100.0, "CHAPITRE UN", 20.0, StyleFixture::Gras),
+        corps(200.0, "Premier paragraphe de la page un."),
+    ];
     let p2 = [en_tete(), corps(200.0, "Deuxieme page avec du texte.")];
     let p3 = [en_tete(), corps(200.0, "Troisieme page avec du texte.")];
     let pdf = fabriquer_pdf(&[&p1, &p2, &p3]);
@@ -120,7 +124,11 @@ fn numero_de_page_residuel() {
 
 #[test]
 fn forcer_titres_remplace_les_reglages() {
-    let p1 = [t(100.0, "Un grand titre", 20.0, StyleFixture::Normal), corps(200.0, "Du texte de corps."), corps(220.0, "Encore du texte de corps.")];
+    let p1 = [
+        t(100.0, "Un grand titre", 20.0, StyleFixture::Normal),
+        corps(200.0, "Du texte de corps."),
+        corps(220.0, "Encore du texte de corps."),
+    ];
     let pdf = fabriquer_pdf(&[&p1]);
     let doc = DocumentPdf::ouvrir(&pdf).unwrap();
     let mut r = reglages();
@@ -251,11 +259,7 @@ fn titre_du_livre_en_tete_du_markdown() {
     let c = convertir_livre(&doc, &reglages(), "Mon petit livre", None, &mut |_, _| {}).unwrap();
     let md = &c.markdown;
     assert!(md.starts_with("<!-- @p1 "), "{md}");
-    assert_eq!(
-        lignes_de_texte(md)[..3],
-        ["# Mon petit livre", "Jean Dupont", "# CHAPITRE UN"],
-        "{md}"
-    );
+    assert_eq!(lignes_de_texte(md)[..3], ["# Mon petit livre", "Jean Dupont", "# CHAPITRE UN"], "{md}");
 }
 
 #[test]

@@ -1,0 +1,3 @@
+# Style du dépôt : lignes de 120 colonnes au plus, expressions courtes gardées sur une ligne.
+max_width = 120
+use_small_heuristics = "Max"

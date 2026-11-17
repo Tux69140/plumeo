@@ -24,13 +24,8 @@ impl Ligne {
 
     /// Taille médiane des mots, exposants exclus.
     pub fn taille(&self) -> f32 {
-        let tailles: Vec<f32> = self
-            .mots
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !self.exposants.contains(i))
-            .map(|(_, m)| m.taille)
-            .collect();
+        let tailles: Vec<f32> =
+            self.mots.iter().enumerate().filter(|(i, _)| !self.exposants.contains(i)).map(|(_, m)| m.taille).collect();
         if tailles.is_empty() {
             // Ligne faite uniquement d'exposants : on retombe sur tous les mots.
             return mediane(self.mots.iter().map(|m| m.taille).collect());
@@ -49,11 +44,7 @@ fn mediane(mut valeurs: Vec<f32>) -> f32 {
     }
     valeurs.sort_by(|a, b| a.total_cmp(b));
     let n = valeurs.len();
-    if n % 2 == 1 {
-        valeurs[n / 2]
-    } else {
-        (valeurs[n / 2 - 1] + valeurs[n / 2]) / 2.0
-    }
+    if n % 2 == 1 { valeurs[n / 2] } else { (valeurs[n / 2 - 1] + valeurs[n / 2]) / 2.0 }
 }
 
 fn centre_y(m: &Mot) -> f32 {
@@ -93,9 +84,7 @@ pub fn regrouper_en_lignes(mots: &[Mot]) -> Vec<Ligne> {
             // « Petit » : plus bas ET d'une police plus petite que la référence ; un mot de
             // même police au rectangle gonflé (glyphe spécial) ne doit rien absorber.
             let petit = ponctuation(mot) || (hauteur(mot) < 0.8 * (y1 - y0) && mot.taille <= 0.8 * taille);
-            if (contient || (petit && chevauchement > 0.0))
-                && meilleur.is_none_or(|(_, m)| chevauchement > m)
-            {
+            if (contient || (petit && chevauchement > 0.0)) && meilleur.is_none_or(|(_, m)| chevauchement > m) {
                 meilleur = Some((i, chevauchement));
             }
         }
@@ -184,10 +173,7 @@ mod tests {
 
     #[test]
     fn exposant_detecte() {
-        let mots = vec![
-            mot("texte", 0.10, 0.100, 0.20, 0.120, 12.0),
-            mot("3", 0.20, 0.100, 0.21, 0.114, 7.0),
-        ];
+        let mots = vec![mot("texte", 0.10, 0.100, 0.20, 0.120, 12.0), mot("3", 0.20, 0.100, 0.21, 0.114, 7.0)];
         let lignes = regrouper_en_lignes(&mots);
         assert_eq!(lignes.len(), 1);
         assert_eq!(lignes[0].exposants, vec![1]);
@@ -197,20 +183,14 @@ mod tests {
 
     #[test]
     fn petit_texte_sur_la_ligne_de_base_n_est_pas_exposant() {
-        let mots = vec![
-            mot("texte", 0.10, 0.100, 0.20, 0.120, 12.0),
-            mot("3", 0.20, 0.108, 0.21, 0.120, 7.0),
-        ];
+        let mots = vec![mot("texte", 0.10, 0.100, 0.20, 0.120, 12.0), mot("3", 0.20, 0.108, 0.21, 0.120, 7.0)];
         let lignes = regrouper_en_lignes(&mots);
         assert!(lignes[0].exposants.is_empty());
     }
 
     #[test]
     fn exposant_dont_le_centre_depasse_le_haut_du_corps_reste_sur_sa_ligne() {
-        let mots = vec![
-            mot("texte", 0.10, 0.100, 0.20, 0.120, 12.0),
-            mot("3", 0.20, 0.090, 0.21, 0.105, 7.0),
-        ];
+        let mots = vec![mot("texte", 0.10, 0.100, 0.20, 0.120, 12.0), mot("3", 0.20, 0.090, 0.21, 0.105, 7.0)];
         let lignes = regrouper_en_lignes(&mots);
         assert_eq!(lignes.len(), 1);
         assert_eq!(lignes[0].exposants, vec![1]);

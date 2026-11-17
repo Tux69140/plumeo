@@ -27,10 +27,8 @@ pub fn echapper_md(texte: &str, debut_de_bloc: bool) -> String {
 fn fusionner(segments: &[Segment]) -> Vec<Segment> {
     let mut sortie: Vec<Segment> = Vec::new();
     for segment in segments {
-        if let (
-            Some(Segment::Texte { texte: t, gras: g, italique: i }),
-            Segment::Texte { texte, gras, italique },
-        ) = (sortie.last_mut(), segment)
+        if let (Some(Segment::Texte { texte: t, gras: g, italique: i }), Segment::Texte { texte, gras, italique }) =
+            (sortie.last_mut(), segment)
             && g == gras
             && i == italique
         {
@@ -215,10 +213,7 @@ mod tests {
             rendu(vec![texte("a ", false, false), texte("(mot)", false, true), texte("suite", false, false)]),
             "a <em>(mot)</em>suite"
         );
-        assert_eq!(
-            rendu(vec![texte("mot", false, false), texte("(x)", false, true)]),
-            "mot<em>(x)</em>"
-        );
+        assert_eq!(rendu(vec![texte("mot", false, false), texte("(x)", false, true)]), "mot<em>(x)</em>");
         assert_eq!(rendu(vec![texte("mot", false, false), texte("ab", true, false)]), "mot**ab**");
         assert_eq!(
             rendu(vec![texte("a ", false, false), texte("(x)", true, true), texte("b", false, false)]),

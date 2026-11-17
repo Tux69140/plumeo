@@ -9,12 +9,9 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::modele::MetaPdf;
 
-static PREFIXE_NUMERO: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[\[(]?\d+[\])]?[\s_-]+").unwrap());
-static AUTEUR_ENTRE_PARENTHESES: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(.+?)\s*\(([^()]+)\)$").unwrap());
-static PARENTHESE_EDITION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s*\([^()]*dition[^()]*\)\s*$").unwrap());
+static PREFIXE_NUMERO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[\[(]?\d+[\])]?[\s_-]+").unwrap());
+static AUTEUR_ENTRE_PARENTHESES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(.+?)\s*\(([^()]+)\)$").unwrap());
+static PARENTHESE_EDITION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s*\([^()]*dition[^()]*\)\s*$").unwrap());
 
 const AUTEUR_INCONNU: &str = "Inconnu";
 const LONGUEUR_MAX_NOM: usize = 150;
@@ -32,8 +29,7 @@ fn est_candidat_auteur(cote: &str) -> bool {
         return true;
     }
     let mots: Vec<&str> = cote.split_whitespace().collect();
-    (2..=4).contains(&mots.len())
-        && mots.iter().all(|m| m.chars().next().is_some_and(char::is_uppercase))
+    (2..=4).contains(&mots.len()) && mots.iter().all(|m| m.chars().next().is_some_and(char::is_uppercase))
 }
 
 /// « Nom, Prénom » devient « Prénom Nom ».
@@ -69,10 +65,7 @@ pub fn proposer(meta: &MetaPdf, nom_fichier: &str) -> (String, String) {
     let titre_meta = PARENTHESE_EDITION.replace(meta.titre.trim(), "").trim().to_string();
     let norme_fichier = normaliser(&titre);
     let norme_meta = normaliser(&titre_meta);
-    if !norme_fichier.is_empty()
-        && norme_meta.starts_with(&norme_fichier)
-        && norme_meta.len() > norme_fichier.len()
-    {
+    if !norme_fichier.is_empty() && norme_meta.starts_with(&norme_fichier) && norme_meta.len() > norme_fichier.len() {
         titre = titre_meta;
     }
     let auteur = auteur_fichier
@@ -117,15 +110,69 @@ mod tests {
     #[test]
     fn proposer_sur_le_corpus() {
         let cas = [
-            ("Aïvanhov, Omraam Mikhaël - Approche de la Cité céleste", "Aïvanhov, Omraam Mikhaël", "Approche de la Cité céleste", "Approche de la Cité céleste", "Omraam Mikhaël Aïvanhov"),
-            ("Anges et l’arbre de vie - Omraam Mikhaël Aïvanhov", "Microsoft Word - F - Les Anges et l'Abre de Vie", "Windows", "Anges et l’arbre de vie", "Omraam Mikhaël Aïvanhov"),
-            ("L’alchimie_spirituelle_Tome_2_Omraam_Mikhaël_Aïvanhov", "", "", "L’alchimie spirituelle Tome 2 Omraam Mikhaël Aïvanhov", "Inconnu"),
-            ("Chronique de l'Akasha - Rudolf Steiner", "Chronique de l'Akasha", "Rudolf Steiner", "Chronique de l'Akasha", "Rudolf Steiner"),
-            ("Le sens de l'amour (Rudolf Steiner)", "Le sens de l'amour", "Rudolf Steiner", "Le sens de l'amour", "Rudolf Steiner"),
-            ("Steiner Rudolf - Connaissance Logique Pensée pratique", "", "", "Connaissance Logique Pensée pratique", "Steiner Rudolf"),
-            ("[02] Lettres Sur La Méditation Occulte - Alice Bailey", "Livres AAB", "AAB", "Lettres Sur La Méditation Occulte", "Alice Bailey"),
-            ("Alice Bailey - Initiation humaine et solaire", "Initiation humaine et solaire: Une connaissance approfondie est révélée (French Edition)", "Alice Bailey", "Initiation humaine et solaire: Une connaissance approfondie est révélée", "Alice Bailey"),
-            ("guerison esoterique_ Une connai - Alice Bailey", "guérison ésotérique: Une connaissance approfondie est révélée (French Edition)", "Alice Bailey", "guérison ésotérique: Une connaissance approfondie est révélée", "Alice Bailey"),
+            (
+                "Aïvanhov, Omraam Mikhaël - Approche de la Cité céleste",
+                "Aïvanhov, Omraam Mikhaël",
+                "Approche de la Cité céleste",
+                "Approche de la Cité céleste",
+                "Omraam Mikhaël Aïvanhov",
+            ),
+            (
+                "Anges et l’arbre de vie - Omraam Mikhaël Aïvanhov",
+                "Microsoft Word - F - Les Anges et l'Abre de Vie",
+                "Windows",
+                "Anges et l’arbre de vie",
+                "Omraam Mikhaël Aïvanhov",
+            ),
+            (
+                "L’alchimie_spirituelle_Tome_2_Omraam_Mikhaël_Aïvanhov",
+                "",
+                "",
+                "L’alchimie spirituelle Tome 2 Omraam Mikhaël Aïvanhov",
+                "Inconnu",
+            ),
+            (
+                "Chronique de l'Akasha - Rudolf Steiner",
+                "Chronique de l'Akasha",
+                "Rudolf Steiner",
+                "Chronique de l'Akasha",
+                "Rudolf Steiner",
+            ),
+            (
+                "Le sens de l'amour (Rudolf Steiner)",
+                "Le sens de l'amour",
+                "Rudolf Steiner",
+                "Le sens de l'amour",
+                "Rudolf Steiner",
+            ),
+            (
+                "Steiner Rudolf - Connaissance Logique Pensée pratique",
+                "",
+                "",
+                "Connaissance Logique Pensée pratique",
+                "Steiner Rudolf",
+            ),
+            (
+                "[02] Lettres Sur La Méditation Occulte - Alice Bailey",
+                "Livres AAB",
+                "AAB",
+                "Lettres Sur La Méditation Occulte",
+                "Alice Bailey",
+            ),
+            (
+                "Alice Bailey - Initiation humaine et solaire",
+                "Initiation humaine et solaire: Une connaissance approfondie est révélée (French Edition)",
+                "Alice Bailey",
+                "Initiation humaine et solaire: Une connaissance approfondie est révélée",
+                "Alice Bailey",
+            ),
+            (
+                "guerison esoterique_ Une connai - Alice Bailey",
+                "guérison ésotérique: Une connaissance approfondie est révélée (French Edition)",
+                "Alice Bailey",
+                "guérison ésotérique: Une connaissance approfondie est révélée",
+                "Alice Bailey",
+            ),
         ];
         for (fichier, mt, ma, titre, auteur) in cas {
             let (t, a) = proposer(&meta(mt, ma), fichier);

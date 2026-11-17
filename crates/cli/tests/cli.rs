@@ -34,10 +34,14 @@ fn cli_convertit_un_pdf_fabrique() {
     let (dossier, pdf, serie) = preparer();
     let sortie = dossier.path().join("sortie/sous-dossier");
     let r = Command::new(env!("CARGO_BIN_EXE_plumeo-cli"))
-        .arg("convertir").arg(&pdf)
-        .arg("--serie").arg(&serie)
-        .arg("--sortie").arg(&sortie)
-        .output().unwrap();
+        .arg("convertir")
+        .arg(&pdf)
+        .arg("--serie")
+        .arg(&serie)
+        .arg("--sortie")
+        .arg(&sortie)
+        .output()
+        .unwrap();
     let err = String::from_utf8_lossy(&r.stderr);
     assert!(r.status.success(), "{err}");
     let base = "Mon petit livre - Jean Dupont";
@@ -58,8 +62,13 @@ fn cli_convertit_un_pdf_fabrique() {
 fn cli_page_affiche_corps_et_retraits() {
     let (_d, pdf, serie) = preparer();
     let r = Command::new(env!("CARGO_BIN_EXE_plumeo-cli"))
-        .arg("page").arg(&pdf).arg("1").arg("--serie").arg(&serie)
-        .output().unwrap();
+        .arg("page")
+        .arg(&pdf)
+        .arg("1")
+        .arg("--serie")
+        .arg(&serie)
+        .output()
+        .unwrap();
     assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
     let s = String::from_utf8_lossy(&r.stdout);
     assert!(s.contains("=== page 1"), "{s}");
@@ -72,8 +81,13 @@ fn cli_page_affiche_corps_et_retraits() {
 fn cli_echoue_avec_code_1_et_message() {
     let (d, _pdf, serie) = preparer();
     let r = Command::new(env!("CARGO_BIN_EXE_plumeo-cli"))
-        .arg("page").arg(d.path().join("absent.pdf")).arg("1").arg("--serie").arg(&serie)
-        .output().unwrap();
+        .arg("page")
+        .arg(d.path().join("absent.pdf"))
+        .arg("1")
+        .arg("--serie")
+        .arg(&serie)
+        .output()
+        .unwrap();
     assert_eq!(r.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&r.stderr).contains("erreur"));
 }
@@ -84,12 +98,18 @@ fn cli_nettoie_titre_et_auteur() {
     let (dossier, pdf, serie) = preparer();
     let sortie = dossier.path().join("sortie");
     let r = Command::new(env!("CARGO_BIN_EXE_plumeo-cli"))
-        .arg("convertir").arg(&pdf)
-        .arg("--serie").arg(&serie)
-        .arg("--sortie").arg(&sortie)
-        .arg("--titre").arg("Mon\u{1} titre")
-        .arg("--auteur").arg("Ada\rAuteur")
-        .output().unwrap();
+        .arg("convertir")
+        .arg(&pdf)
+        .arg("--serie")
+        .arg(&serie)
+        .arg("--sortie")
+        .arg(&sortie)
+        .arg("--titre")
+        .arg("Mon\u{1} titre")
+        .arg("--auteur")
+        .arg("Ada\rAuteur")
+        .output()
+        .unwrap();
     assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
     let epub = std::fs::File::open(sortie.join("Mon titre - Ada Auteur.epub")).unwrap();
     let mut archive = zip::ZipArchive::new(epub).unwrap();
@@ -105,10 +125,14 @@ fn cli_avertit_avant_d_ecraser() {
     let sortie = dossier.path().join("sortie");
     let lancer = || {
         Command::new(env!("CARGO_BIN_EXE_plumeo-cli"))
-            .arg("convertir").arg(&pdf)
-            .arg("--serie").arg(&serie)
-            .arg("--sortie").arg(&sortie)
-            .output().unwrap()
+            .arg("convertir")
+            .arg(&pdf)
+            .arg("--serie")
+            .arg(&serie)
+            .arg("--sortie")
+            .arg(&sortie)
+            .output()
+            .unwrap()
     };
     let premier = lancer();
     assert!(!String::from_utf8_lossy(&premier.stderr).contains("remplacé"));

@@ -81,17 +81,19 @@ pub fn fusionner_appels_orphelins(evenements: Vec<Event<'static>>) -> Vec<Event<
     while let Some(e) = it.next() {
         if matches!(&e, Event::Text(t) if &**t == "[")
             && let Some(Event::Text(m)) = it.peek()
-                && m.len() > 1 && m.starts_with('^') {
-                    let m = m.clone();
-                    let mut copie = it.clone();
-                    copie.next();
-                    if matches!(copie.peek(), Some(Event::Text(t)) if &**t == "]") {
-                        it.next();
-                        it.next();
-                        sortie.push(Event::FootnoteReference(m[1..].to_string().into()));
-                        continue;
-                    }
-                }
+            && m.len() > 1
+            && m.starts_with('^')
+        {
+            let m = m.clone();
+            let mut copie = it.clone();
+            copie.next();
+            if matches!(copie.peek(), Some(Event::Text(t)) if &**t == "]") {
+                it.next();
+                it.next();
+                sortie.push(Event::FootnoteReference(m[1..].to_string().into()));
+                continue;
+            }
+        }
         sortie.push(e);
     }
     sortie
@@ -183,7 +185,8 @@ fn rendre(evenements: Vec<Event<'static>>, chapitre: usize, renvois: &mut Renvoi
                         let href = lien(definition, chapitre, "note", &id);
                         Event::Html(
                             format!(
-                                "<a epub:type=\"noteref\" id=\"appel-{id}{suffixe}\" href=\"{href}\"><sup>{affiche}</sup></a>"
+                                "<a epub:type=\"noteref\" id=\"appel-{id}{suffixe}\" \
+                                 href=\"{href}\"><sup>{affiche}</sup></a>"
                             )
                             .into(),
                         )
@@ -223,7 +226,17 @@ pub fn rendre_corps(
 pub fn page(langue: &str, titre: &str, corps: &str) -> String {
     let l = echapper(langue);
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" xml:lang=\"{l}\" lang=\"{l}\">\n<head>\n<meta charset=\"utf-8\" />\n<title>{}</title>\n<link rel=\"stylesheet\" type=\"text/css\" href=\"style.css\" />\n</head>\n<body>\n{corps}</body>\n</html>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" \
+         xml:lang=\"{l}\" lang=\"{l}\">\n\
+         <head>\n\
+         <meta charset=\"utf-8\" />\n\
+         <title>{}</title>\n\
+         <link rel=\"stylesheet\" type=\"text/css\" href=\"style.css\" />\n\
+         </head>\n\
+         <body>\n\
+         {corps}</body>\n\
+         </html>\n",
         echapper(titre)
     )
 }

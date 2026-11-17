@@ -50,8 +50,7 @@ impl ReglagesSerie {
     pub fn lire(chemin: &Path) -> Result<Self, ErreurMoteur> {
         let texte = std::fs::read_to_string(chemin)
             .map_err(|e| ErreurMoteur::Reglages(format!("{} : {e}", chemin.display())))?;
-        serde_json::from_str(&texte)
-            .map_err(|e| ErreurMoteur::Reglages(format!("{} : {e}", chemin.display())))
+        serde_json::from_str(&texte).map_err(|e| ErreurMoteur::Reglages(format!("{} : {e}", chemin.display())))
     }
 
     /// Exception éventuelle d'abord, sinon parité (gauche = paire, droite = impaire).
@@ -112,7 +111,8 @@ mod tests {
 
     #[test]
     fn json_minimal() {
-        let json = r#"{"nom":"x","paire":{"entete":0.07,"pied":0,"notes":0},"impaire":{"entete":0.07,"pied":0,"notes":0}}"#;
+        let json =
+            r#"{"nom":"x","paire":{"entete":0.07,"pied":0,"notes":0},"impaire":{"entete":0.07,"pied":0,"notes":0}}"#;
         let s: ReglagesSerie = serde_json::from_str(json).unwrap();
         assert_eq!(s.langue, "fra");
         assert_eq!(s.titres, SourceTitres::Auto);

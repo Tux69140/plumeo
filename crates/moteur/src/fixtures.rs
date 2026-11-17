@@ -34,10 +34,7 @@ pub fn fabriquer_pdf(pages: &[&[TexteFixture]]) -> tempfile::TempPath {
     for textes in pages {
         let mut page = doc
             .pages_mut()
-            .create_page_at_end(PdfPagePaperSize::Custom(
-                PdfPoints::new(LARGEUR_A4),
-                PdfPoints::new(HAUTEUR_A4),
-            ))
+            .create_page_at_end(PdfPagePaperSize::Custom(PdfPoints::new(LARGEUR_A4), PdfPoints::new(HAUTEUR_A4)))
             .expect("création de la page");
         for t in *textes {
             let police = match t.style {
@@ -56,10 +53,7 @@ pub fn fabriquer_pdf(pages: &[&[TexteFixture]]) -> tempfile::TempPath {
                 .expect("ajout du texte");
         }
     }
-    let fichier = tempfile::Builder::new()
-        .suffix(".pdf")
-        .tempfile()
-        .expect("fichier temporaire");
+    let fichier = tempfile::Builder::new().suffix(".pdf").tempfile().expect("fichier temporaire");
     doc.save_to_file(fichier.path()).expect("écriture du PDF");
     fichier.into_temp_path()
 }

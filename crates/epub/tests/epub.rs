@@ -14,11 +14,10 @@ fn meta() -> Metadonnees {
 
 /// PNG 1x1 minimal valide.
 const PNG: &[u8] = &[
-    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xff, 0xff, 0x3f,
-    0x00, 0x05, 0xfe, 0x02, 0xfe, 0xa7, 0x35, 0x81, 0x84, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
-    0x44, 0xae, 0x42, 0x60, 0x82,
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49,
+    0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xff, 0xff, 0x3f, 0x00, 0x05, 0xfe, 0x02, 0xfe, 0xa7, 0x35, 0x81, 0x84,
+    0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
 ];
 
 fn fabriquer(md: &str, couv: Option<&[u8]>) -> (tempfile::TempDir, std::path::PathBuf) {
@@ -116,7 +115,10 @@ fn marqueur_etoile() {
 
 #[test]
 fn xhtml_bien_forme() {
-    let md = "<!-- @p1 1,2,3,4 -->\n# T\n\n<!-- @p1 1,2,3,4 -->\nUn \\& \\<b\\> et 1<sup>er</sup> « guillemets » \"droits\" <em>x</em>\\\nligne\n\n---\n\nFin[^1-2].\n\n<!-- @p2 1,2,3,4 -->\n[^1-2]: n & \\<b\\>\n";
+    let md = "<!-- @p1 1,2,3,4 -->\n# T\n\n\
+              <!-- @p1 1,2,3,4 -->\nUn \\& \\<b\\> et 1<sup>er</sup> « guillemets » \"droits\" <em>x</em>\\\n\
+              ligne\n\n---\n\nFin[^1-2].\n\n\
+              <!-- @p2 1,2,3,4 -->\n[^1-2]: n & \\<b\\>\n";
     let (_d, c) = fabriquer(md, Some(PNG));
     let e = entrees(&c);
     let mut n = 0;
@@ -132,7 +134,9 @@ fn xhtml_bien_forme() {
 
 #[test]
 fn ancres_absentes() {
-    let md = "<!-- @p12 120,145,880,210 -->\n# T\n\n<!-- @p6g 1,2,3,4 -->\nTexte[^1-1].\n\n<!-- @p12 1,2,3,4 -->\n[^1-1]: N.\n";
+    let md = "<!-- @p12 120,145,880,210 -->\n# T\n\n\
+              <!-- @p6g 1,2,3,4 -->\nTexte[^1-1].\n\n\
+              <!-- @p12 1,2,3,4 -->\n[^1-1]: N.\n";
     let (_d, c) = fabriquer(md, None);
     for (nom, v, _) in entrees(&c) {
         assert!(!String::from_utf8_lossy(&v).contains("@p"), "{nom}");
@@ -219,10 +223,7 @@ fn notes_de_fin_de_livre_liees_entre_chapitres() {
     let e = entrees(&c);
     let a = texte(&e, "OEBPS/chap-001.xhtml");
     let b = texte(&e, "OEBPS/chap-002.xhtml");
-    assert!(
-        a.contains(r#"<a epub:type="noteref" id="appel-1" href="chap-002.xhtml#note-1"><sup>1</sup></a>"#),
-        "{a}"
-    );
+    assert!(a.contains(r#"<a epub:type="noteref" id="appel-1" href="chap-002.xhtml#note-1"><sup>1</sup></a>"#), "{a}");
     let note1 = &b[b.find(r#"<aside epub:type="footnote" id="note-1">"#).expect("aside 1")..];
     assert!(note1.contains(r##"<a href="chap-001.xhtml#appel-1">↩</a>"##), "{b}");
     assert!(b.contains(r##"id="appel-2" href="#note-2""##), "{b}");
@@ -268,11 +269,15 @@ fn titres_identifies_dans_tout_le_livre() {
 
 #[test]
 fn liens_du_sommaire_vers_le_fichier_du_titre() {
-    let md = "# Table des matières\n\n[**1. VISITE À PATMOS**](#t-1-visite-à-patmos)\n\n[Perdu](#t-perdu)\n\n[Ailleurs](https://exemple.org)\n\n# 1 VISITE À PATMOS\n\nx\n";
+    let md = "# Table des matières\n\n[**1. VISITE À PATMOS**](#t-1-visite-à-patmos)\n\n\
+              [Perdu](#t-perdu)\n\n[Ailleurs](https://exemple.org)\n\n# 1 VISITE À PATMOS\n\nx\n";
     let (_d, c) = fabriquer(md, None);
     let e = entrees(&c);
     let table = texte(&e, "OEBPS/chap-001.xhtml");
-    assert!(table.contains(r##"<a href="chap-002.xhtml#t-1-visite-à-patmos"><strong>1. VISITE À PATMOS</strong></a>"##), "{table}");
+    assert!(
+        table.contains(r##"<a href="chap-002.xhtml#t-1-visite-à-patmos"><strong>1. VISITE À PATMOS</strong></a>"##),
+        "{table}"
+    );
     // Sans cible connue : texte simple, aucun lien cassé.
     assert!(table.contains("<p>Perdu</p>"), "{table}");
     assert!(table.contains("<p>Ailleurs</p>"), "{table}");
@@ -287,7 +292,10 @@ fn epubcheck() {
         eprintln!("EPUBCHECK_JAR non défini");
         return;
     };
-    let md = "<!-- @p1 1,2,3,4 -->\n# Table des matières\n\n[**1. Un été à Patmos**](#t-1-un-été-à-patmos)\n\n[Sous](#t-sous)\n\n[Perdu](#t-perdu)\n\n# 1 Un été à Patmos\n\nTexte[^1-1] et[^2-*] puis[^3-3].\n\n## Sous\n\nSuite 1<sup>er</sup>.\n\n[^1-1]: N1.\n\n[^2-*]: N2.\n\n# Deux\n\nAutre.\n\n[^3-3]: N3, en fin de livre.\n";
+    let md = "<!-- @p1 1,2,3,4 -->\n# Table des matières\n\n\
+              [**1. Un été à Patmos**](#t-1-un-été-à-patmos)\n\n[Sous](#t-sous)\n\n[Perdu](#t-perdu)\n\n\
+              # 1 Un été à Patmos\n\nTexte[^1-1] et[^2-*] puis[^3-3].\n\n## Sous\n\nSuite 1<sup>er</sup>.\n\n\
+              [^1-1]: N1.\n\n[^2-*]: N2.\n\n# Deux\n\nAutre.\n\n[^3-3]: N3, en fin de livre.\n";
     let (_d, c) = fabriquer(md, Some(PNG));
     let s = std::process::Command::new("java").args(["-jar", &jar]).arg(&c).status().unwrap();
     assert!(s.success());
@@ -295,8 +303,7 @@ fn epubcheck() {
 
 /// Titre (`<title>`) de chaque fichier de chapitre, dans l'ordre des fichiers.
 fn titres_des_chapitres(e: &[(String, Vec<u8>, zip::CompressionMethod)]) -> Vec<String> {
-    let mut noms: Vec<&String> =
-        e.iter().map(|(n, _, _)| n).filter(|n| n.starts_with("OEBPS/chap-")).collect();
+    let mut noms: Vec<&String> = e.iter().map(|(n, _, _)| n).filter(|n| n.starts_with("OEBPS/chap-")).collect();
     noms.sort();
     noms.iter()
         .map(|n| {
@@ -307,7 +314,8 @@ fn titres_des_chapitres(e: &[(String, Vec<u8>, zip::CompressionMethod)]) -> Vec<
         .collect()
 }
 
-const LIVRE_A_SOMMAIRE_DE_FIN: &str = "# Livre\n\ntexte\n\n# Ch 1\n\n[**Ch 1**](#t-ch-1) ailleurs…\n\n# Table des matières\n\n[**Ch 1**](#t-ch-1)\n\ncolophon\n";
+const LIVRE_A_SOMMAIRE_DE_FIN: &str = "# Livre\n\ntexte\n\n# Ch 1\n\n[**Ch 1**](#t-ch-1) ailleurs…\n\n\
+                                       # Table des matières\n\n[**Ch 1**](#t-ch-1)\n\ncolophon\n";
 
 #[test]
 fn sommaire_de_fin_deplace_apres_la_page_de_titre() {
@@ -400,7 +408,8 @@ fn livre_sans_sommaire_inchange() {
 
 #[test]
 fn note_du_colophon_reste_en_place_avec_son_aller_retour() {
-    let md = "# Livre\n\nx\n\n# Ch 1\n\ny\n\n# Sommaire\n\n[Ch 1](#t-ch-1)\n\nColophon[^5-1].\n\n[^5-1]: Note du colophon.\n";
+    let md = "# Livre\n\nx\n\n# Ch 1\n\ny\n\n# Sommaire\n\n[Ch 1](#t-ch-1)\n\n\
+              Colophon[^5-1].\n\n[^5-1]: Note du colophon.\n";
     let (_d, c) = fabriquer(md, None);
     let e = entrees(&c);
     assert_eq!(titres_des_chapitres(&e), ["Livre", "Sommaire", "Ch 1"]);

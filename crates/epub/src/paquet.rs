@@ -11,7 +11,12 @@ use crate::{ErreurEpub, Metadonnees};
 
 const CSS: &str = include_str!("style.css");
 
-const CONTAINER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">\n<rootfiles>\n<rootfile full-path=\"OEBPS/content.opf\" media-type=\"application/oebps-package+xml\" />\n</rootfiles>\n</container>\n";
+const CONTAINER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+    <container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">\n\
+    <rootfiles>\n\
+    <rootfile full-path=\"OEBPS/content.opf\" media-type=\"application/oebps-package+xml\" />\n\
+    </rootfiles>\n\
+    </container>\n";
 
 fn zip_err(e: zip::result::ZipError) -> ErreurEpub {
     match e {
@@ -39,7 +44,10 @@ pub fn nav(chapitres: &[Chapitre], meta: &Metadonnees) -> String {
 }
 
 pub fn opf(chapitres: &[Chapitre], meta: &Metadonnees, couverture: bool) -> String {
-    let mut s = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"id-livre\" xml:lang=\"");
+    let mut s = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"id-livre\" xml:lang=\"",
+    );
     s.push_str(&echapper(&meta.langue));
     s.push_str("\">\n<metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n");
     s.push_str(&format!("<dc:identifier id=\"id-livre\">{}</dc:identifier>\n", echapper(&meta.identifiant)));
@@ -56,11 +64,18 @@ pub fn opf(chapitres: &[Chapitre], meta: &Metadonnees, couverture: bool) -> Stri
     s.push_str("<item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\" />\n");
     s.push_str("<item id=\"style\" href=\"style.css\" media-type=\"text/css\" />\n");
     if couverture {
-        s.push_str("<item id=\"couverture-img\" href=\"images/couverture.png\" media-type=\"image/png\" properties=\"cover-image\" />\n");
+        s.push_str(
+            "<item id=\"couverture-img\" href=\"images/couverture.png\" media-type=\"image/png\" \
+             properties=\"cover-image\" />\n",
+        );
         s.push_str("<item id=\"couverture\" href=\"couverture.xhtml\" media-type=\"application/xhtml+xml\" />\n");
     }
     for i in 0..chapitres.len() {
-        s.push_str(&format!("<item id=\"chap-{0:03}\" href=\"{1}\" media-type=\"application/xhtml+xml\" />\n", i + 1, nom_chapitre(i)));
+        s.push_str(&format!(
+            "<item id=\"chap-{0:03}\" href=\"{1}\" media-type=\"application/xhtml+xml\" />\n",
+            i + 1,
+            nom_chapitre(i)
+        ));
     }
     s.push_str("</manifest>\n<spine>\n");
     if couverture {

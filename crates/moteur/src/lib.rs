@@ -1,10 +1,10 @@
 //! Moteur de conversion PDF → EPUB de Pluméo.
 
-#[cfg(feature = "fixtures")]
-pub mod fixtures;
 pub mod blocs;
 pub mod convertir;
 pub mod double_page;
+#[cfg(feature = "fixtures")]
+pub mod fixtures;
 pub mod lignes;
 pub mod markdown;
 pub mod metadonnees;

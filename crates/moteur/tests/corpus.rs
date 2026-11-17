@@ -311,7 +311,8 @@ fn verifier_sommaire_en_tete(chapitres: &[(String, String)], attendu: bool) -> R
             trouve = true;
             if nom != "chap-002.xhtml" {
                 return Err(format!(
-                    "le chapitre « {} » à liens de sommaire est {nom} au lieu de chap-002.xhtml (juste après la page de titre)",
+                    "le chapitre « {} » à liens de sommaire est {nom} au lieu de chap-002.xhtml \
+                     (juste après la page de titre)",
                     balises.replace_all(&c[1], "").trim()
                 ));
             }
@@ -377,7 +378,12 @@ fn lancer_epubcheck(jar: &str, chemin: &Path) -> (bool, Result<(), String>) {
 /// Génère l'EPUB dans un dossier temporaire, mesure sa structure, puis le valide avec
 /// epubcheck si `jar` est donné (c'est la seule étape qui en dépend). Seul l'échec de
 /// `generer_epub` est une erreur : les autres sont dans le `ControleEpub`.
-fn controler_epub(jar: Option<&str>, markdown: &str, nom: &str, sommaire_attendu: bool) -> Result<ControleEpub, String> {
+fn controler_epub(
+    jar: Option<&str>,
+    markdown: &str,
+    nom: &str,
+    sommaire_attendu: bool,
+) -> Result<ControleEpub, String> {
     let dossier = tempfile::tempdir().map_err(|e| e.to_string())?;
     let chemin = dossier.path().join("livre.epub");
     generer_epub(markdown, &meta_corpus(nom), None, &chemin).map_err(|e| format!("generer_epub : {e}"))?;
@@ -435,11 +441,8 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
     if let Err(e) = verifier_titre_livre(&blocs, &titre_livre) {
         echecs.push(e);
     }
-    let longueurs: Vec<usize> = blocs
-        .iter()
-        .filter(|b| matches!(b.genre, Genre::Paragraphe))
-        .map(|b| b.texte.chars().count())
-        .collect();
+    let longueurs: Vec<usize> =
+        blocs.iter().filter(|b| matches!(b.genre, Genre::Paragraphe)).map(|b| b.texte.chars().count()).collect();
     let (med, max) = (mediane(longueurs.clone()), longueurs.iter().copied().max().unwrap_or(0));
     let med_min = d.and_then(|d| d.mediane_paragraphes_min).unwrap_or(80);
     if !(med_min..=1500).contains(&med) {
@@ -447,7 +450,10 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
     }
     if max > 8000 {
         let long = blocs.iter().find(|b| matches!(b.genre, Genre::Paragraphe) && b.texte.chars().count() == max);
-        echecs.push(format!("paragraphe de {max} caractères (> 8000) : {}", long.map_or(String::new(), |b| b.ancre.to_string())));
+        echecs.push(format!(
+            "paragraphe de {max} caractères (> 8000) : {}",
+            long.map_or(String::new(), |b| b.ancre.to_string())
+        ));
     }
     let mut precedente: Option<Ancre> = None;
     for b in blocs.iter().filter(|b| !matches!(b.genre, Genre::Note(_))) {
@@ -491,18 +497,13 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
     }
     let titres_de_sommaire: Vec<&BlocMd> = blocs
         .windows(2)
-        .filter(|w| {
-            matches!(w[1].genre, Genre::Entree)
-                && est_titre_de_sommaire(&w[0].texte)
-        })
+        .filter(|w| matches!(w[1].genre, Genre::Entree) && est_titre_de_sommaire(&w[0].texte))
         .map(|w| &w[0])
         .collect();
     n1.retain(|b| !titres_de_sommaire.iter().any(|s| std::ptr::eq(*s, *b)));
     let entrees = blocs.iter().filter(|b| matches!(b.genre, Genre::Entree)).count();
-    let n1_prefixes = n1
-        .iter()
-        .filter(|b| a.prefixe_n1.as_ref().is_none_or(|p| b.texte.starts_with(p.as_str())))
-        .count();
+    let n1_prefixes =
+        n1.iter().filter(|b| a.prefixe_n1.as_ref().is_none_or(|p| b.texte.starts_with(p.as_str()))).count();
     let notes: Vec<(&BlocMd, &str)> = blocs
         .iter()
         .filter_map(|b| match &b.genre {
@@ -513,7 +514,11 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
     if let Some(s) = a.source_titres
         && s != conversion.source_titres
     {
-        echecs.push(format!("source des titres {} au lieu de {}", source_texte(conversion.source_titres), source_texte(s)));
+        echecs.push(format!(
+            "source des titres {} au lieu de {}",
+            source_texte(conversion.source_titres),
+            source_texte(s)
+        ));
     }
     let qualif = a.prefixe_n1.as_ref().map_or(String::new(), |p| format!(" commençant par « {p} »"));
     if let Some(n) = a.titres_n1
@@ -558,9 +563,7 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
         }
     }
     for np in &a.notes_pages {
-        let ok = notes
-            .iter()
-            .any(|(b, m)| b.ancre.page == np.page && np.marqueur.as_ref().is_none_or(|x| x == m));
+        let ok = notes.iter().any(|(b, m)| b.ancre.page == np.page && np.marqueur.as_ref().is_none_or(|x| x == m));
         if !ok {
             echecs.push(format!("aucune note {} ancrée page {}", np.marqueur.as_deref().unwrap_or(""), np.page));
         }
@@ -595,7 +598,8 @@ fn verifier(corpus: &Path, entree: &Entree) -> Vec<String> {
     }
 
     println!(
-        "{} : {:.1} s, titres {} (n1 {}, n1{qualif} {}, n2 {}), {entrees} entrées de sommaire, {} notes, paragraphes {} (médiane {med}, max {max}), {} retraits, {} points, {}",
+        "{} : {:.1} s, titres {} (n1 {}, n1{qualif} {}, n2 {}), {entrees} entrées de sommaire, {} notes, \
+         paragraphes {} (médiane {med}, max {max}), {} retraits, {} points, {}",
         entree.fichier,
         duree,
         source_texte(conversion.source_titres),
@@ -655,7 +659,8 @@ mod tests {
     fn liens_de_sommaire_comptes_dans_l_epub() {
         // Une entrée sans titre cible est rendue en texte : elle ne compte pas.
         let md = format!(
-            "{ANCRE}\n# Table\n\n{ANCRE}\n[Deux](#t-deux)\n\n{ANCRE}\n[Absent](#t-absent)\n\n{ANCRE}\n# Deux\n\n{ANCRE}\nTexte.\n"
+            "{ANCRE}\n# Table\n\n{ANCRE}\n[Deux](#t-deux)\n\n{ANCRE}\n[Absent](#t-absent)\n\n\
+             {ANCRE}\n# Deux\n\n{ANCRE}\nTexte.\n"
         );
         let dossier = tempfile::tempdir().unwrap();
         let chemin = dossier.path().join("livre.epub");
@@ -676,7 +681,8 @@ mod tests {
         assert_eq!(verifier_sommaire_en_tete(&en_2, true), Ok(()));
         // Sans lien interne, ou sans chapitre de sommaire : rien à vérifier tant que le
         // livre n'attend pas de sommaire.
-        let sans_lien = [chapitre("chap-001.xhtml", "Livre", ""), chapitre("chap-004.xhtml", "SOMMAIRE", "<p>Un 7</p>")];
+        let sans_lien =
+            [chapitre("chap-001.xhtml", "Livre", ""), chapitre("chap-004.xhtml", "SOMMAIRE", "<p>Un 7</p>")];
         assert_eq!(verifier_sommaire_en_tete(&sans_lien, false), Ok(()));
         let autre = [chapitre("chap-005.xhtml", "Un chapitre", LIEN)];
         assert_eq!(verifier_sommaire_en_tete(&autre, false), Ok(()));
@@ -691,7 +697,8 @@ mod tests {
         let e = verifier_sommaire_en_tete(&sans_chapitre, true).unwrap_err();
         assert!(e.contains("attendu") && e.contains("chap-002.xhtml"), "{e}");
         // Un chapitre « Sommaire » sans lien interne n'est pas un sommaire cliquable.
-        let sans_lien = [chapitre("chap-001.xhtml", "Livre", ""), chapitre("chap-002.xhtml", "SOMMAIRE", "<p>Un 7</p>")];
+        let sans_lien =
+            [chapitre("chap-001.xhtml", "Livre", ""), chapitre("chap-002.xhtml", "SOMMAIRE", "<p>Un 7</p>")];
         let e = verifier_sommaire_en_tete(&sans_lien, true).unwrap_err();
         assert!(e.contains("attendu"), "{e}");
         let e = verifier_sommaire_en_tete(&[], true).unwrap_err();
@@ -712,11 +719,17 @@ mod tests {
         }
     }
 
+    /// Livre dont le sommaire imprimé, à liens, est le dernier chapitre.
+    fn md_sommaire_a_la_fin() -> String {
+        format!(
+            "{ANCRE}\n# Livre\n\n{ANCRE}\n# Un\n\n{ANCRE}\nTexte.\n\n\
+             {ANCRE}\n# Table des matières\n\n{ANCRE}\n[Un](#t-un)\n"
+        )
+    }
+
     #[test]
     fn sommaire_imprime_a_la_fin_remonte_en_position_2() {
-        let md = format!(
-            "{ANCRE}\n# Livre\n\n{ANCRE}\n# Un\n\n{ANCRE}\nTexte.\n\n{ANCRE}\n# Table des matières\n\n{ANCRE}\n[Un](#t-un)\n"
-        );
+        let md = md_sommaire_a_la_fin();
         let dossier = tempfile::tempdir().unwrap();
         let chemin = dossier.path().join("livre.epub");
         generer_epub(&md, &meta_corpus("Livre"), None, &chemin).unwrap();
@@ -730,9 +743,7 @@ mod tests {
 
     #[test]
     fn controle_epub_sans_epubcheck_verifie_quand_meme_la_structure() {
-        let md = format!(
-            "{ANCRE}\n# Livre\n\n{ANCRE}\n# Un\n\n{ANCRE}\nTexte.\n\n{ANCRE}\n# Table des matières\n\n{ANCRE}\n[Un](#t-un)\n"
-        );
+        let md = md_sommaire_a_la_fin();
         let controle = controler_epub(None, &md, "Livre", true).unwrap();
         assert!(!controle.epubcheck_lance);
         assert_eq!(controle.liens, Ok(1));

@@ -46,12 +46,8 @@ static NUMERO_PAGE: LazyLock<Regex> = LazyLock::new(|| {
 const ECART_NUMERO_CHAPITRE: f32 = 1.5;
 
 pub fn classer_lignes(page: &Page, lignes: Vec<Ligne>, zones: &Zones) -> PageClassee {
-    let mut resultat = PageClassee {
-        corps: Vec::new(),
-        notes: Vec::new(),
-        retraits: Vec::new(),
-        numero_residuel: false,
-    };
+    let mut resultat =
+        PageClassee { corps: Vec::new(), notes: Vec::new(), retraits: Vec::new(), numero_residuel: false };
     let retirer = |ligne: &Ligne, role| Retrait {
         ancre: Ancre::depuis(page.numero, page.moitie, ligne.rect),
         role,
@@ -72,7 +68,8 @@ pub fn classer_lignes(page: &Page, lignes: Vec<Ligne>, zones: &Zones) -> PageCla
     // Numéro résiduel : première ou dernière ligne du corps seulement, et pas plus
     // grande que le texte de la page (sinon c'est un numéro de chapitre).
     let taille_texte = mediane(resultat.corps.iter().map(Ligne::taille).collect());
-    let est_numero = |ligne: &Ligne| est_numero_page(&ligne.texte()) && ligne.taille() < taille_texte + ECART_NUMERO_CHAPITRE;
+    let est_numero =
+        |ligne: &Ligne| est_numero_page(&ligne.texte()) && ligne.taille() < taille_texte + ECART_NUMERO_CHAPITRE;
     if resultat.corps.last().is_some_and(est_numero) {
         let ligne = resultat.corps.pop().expect("corps non vide");
         resultat.retraits.push(retirer(&ligne, Role::NumeroPage));
@@ -108,14 +105,7 @@ mod tests {
         let rect = Rect { x0: 0.1, y0: y - 0.01, x1: 0.9, y1: y + 0.01 };
         let mots = texte
             .split(' ')
-            .map(|t| Mot {
-                texte: t.into(),
-                rect,
-                taille: 10.0,
-                gras: false,
-                italique: false,
-                espace_avant: true,
-            })
+            .map(|t| Mot { texte: t.into(), rect, taille: 10.0, gras: false, italique: false, espace_avant: true })
             .collect();
         Ligne { mots, exposants: vec![], rect }
     }
@@ -127,12 +117,7 @@ mod tests {
     #[test]
     fn classe_par_centre() {
         let zones = Zones { entete: 0.07, pied: 0.05, notes: 0.10 };
-        let lignes = vec![
-            ligne("haut", 0.03),
-            ligne("milieu", 0.50),
-            ligne("note", 0.90),
-            ligne("bas", 0.97),
-        ];
+        let lignes = vec![ligne("haut", 0.03), ligne("milieu", 0.50), ligne("note", 0.90), ligne("bas", 0.97)];
         let r = classer_lignes(&page(), lignes, &zones);
         assert_eq!(r.corps.len(), 1);
         assert_eq!(r.corps[0].texte(), "milieu");

@@ -37,14 +37,29 @@ impl Paragraphe {
 #[derive(Clone, Debug)]
 pub enum Bloc {
     Paragraphe(Paragraphe),
-    Titre { niveau: u8, texte: String, ancre: Ancre },
-    Note { etiquette: String, marqueur: String, segments: Vec<Segment>, ancre: Ancre },
+    Titre {
+        niveau: u8,
+        texte: String,
+        ancre: Ancre,
+    },
+    Note {
+        etiquette: String,
+        marqueur: String,
+        segments: Vec<Segment>,
+        ancre: Ancre,
+    },
     /// Saut de section : la page précédente s'arrête bien avant le bas du bloc de texte
     /// (page liminaire, colophon, fin de partie). Ancre : première ligne de la page suivante.
-    Saut { ancre: Ancre },
+    Saut {
+        ancre: Ancre,
+    },
     /// Entrée d'un sommaire imprimé : lien vers le titre d'identifiant `cible`
     /// (voir `plumeo_commun::ancre_titre`).
-    EntreeSommaire { segments: Vec<Segment>, cible: String, ancre: Ancre },
+    EntreeSommaire {
+        segments: Vec<Segment>,
+        cible: String,
+        ancre: Ancre,
+    },
 }
 
 impl Bloc {

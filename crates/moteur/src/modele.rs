@@ -103,10 +103,8 @@ impl FromStr for Ancre {
             _ => (tete, Moitie::Entiere),
         };
         let page = chiffres.parse().map_err(|_| invalide())?;
-        let valeurs: Vec<u16> = rect
-            .split(',')
-            .map(|v| v.trim().parse().map_err(|_| invalide()))
-            .collect::<Result<_, _>>()?;
+        let valeurs: Vec<u16> =
+            rect.split(',').map(|v| v.trim().parse().map_err(|_| invalide())).collect::<Result<_, _>>()?;
         let rect: [u16; 4] = valeurs.try_into().map_err(|_| invalide())?;
         Ok(Ancre { page, moitie, rect })
     }

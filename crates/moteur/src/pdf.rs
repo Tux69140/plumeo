@@ -33,8 +33,7 @@ fn charger_pdfium() -> Result<Pdfium, String> {
     for d in &dossiers {
         let chemin = Pdfium::pdfium_platform_library_name_at_path(d);
         if chemin.is_file() {
-            let liaison = Pdfium::bind_to_library(&chemin)
-                .map_err(|e| format!("{} : {e}", chemin.display()))?;
+            let liaison = Pdfium::bind_to_library(&chemin).map_err(|e| format!("{} : {e}", chemin.display()))?;
             return Ok(Pdfium::new(liaison));
         }
     }
@@ -44,10 +43,7 @@ fn charger_pdfium() -> Result<Pdfium, String> {
 
 /// Instance unique de pdfium, chargée à la première utilisation.
 pub(crate) fn pdfium() -> Result<&'static Pdfium, ErreurMoteur> {
-    PDFIUM
-        .get_or_init(charger_pdfium)
-        .as_ref()
-        .map_err(|e| ErreurMoteur::PdfiumIntrouvable(e.clone()))
+    PDFIUM.get_or_init(charger_pdfium).as_ref().map_err(|e| ErreurMoteur::PdfiumIntrouvable(e.clone()))
 }
 
 pub struct DocumentPdf {
@@ -70,10 +66,7 @@ impl DocumentPdf {
         if numero == 0 {
             return Err(ErreurMoteur::Page(numero, "les pages commencent à 1".into()));
         }
-        self.doc
-            .pages()
-            .get((numero - 1) as PdfPageIndex)
-            .map_err(|e| ErreurMoteur::Page(numero, e.to_string()))
+        self.doc.pages().get((numero - 1) as PdfPageIndex).map_err(|e| ErreurMoteur::Page(numero, e.to_string()))
     }
 
     /// Lit les mots de la page `numero` (base 1).
@@ -99,10 +92,12 @@ impl DocumentPdf {
             let nom = c.font_name();
             let poids_fort = matches!(
                 c.font_weight(),
-                Some(PdfFontWeight::Weight600
-                    | PdfFontWeight::Weight700Bold
-                    | PdfFontWeight::Weight800
-                    | PdfFontWeight::Weight900)
+                Some(
+                    PdfFontWeight::Weight600
+                        | PdfFontWeight::Weight700Bold
+                        | PdfFontWeight::Weight800
+                        | PdfFontWeight::Weight900
+                )
             ) || matches!(c.font_weight(), Some(PdfFontWeight::Custom(v)) if v >= 600);
             let gras = poids_fort || nom_contient(&nom, &["bold", "black", "heavy", "semibold"]);
             let italique = nom_contient(&nom, &["italic", "oblique"]) || c.font_is_italic();
@@ -117,13 +112,7 @@ impl DocumentPdf {
                 italique,
             });
         }
-        Ok(Page {
-            numero,
-            moitie: Moitie::Entiere,
-            largeur_pt: largeur,
-            hauteur_pt: hauteur,
-            mots: assembleur.finir(),
-        })
+        Ok(Page { numero, moitie: Moitie::Entiere, largeur_pt: largeur, hauteur_pt: hauteur, mots: assembleur.finir() })
     }
 
     /// Signets aplatis, dans l'ordre du document ; niveau 1 = racine.
@@ -149,13 +138,7 @@ impl DocumentPdf {
     }
 
     pub fn meta(&self) -> MetaPdf {
-        let lire = |t| {
-            self.doc
-                .metadata()
-                .get(t)
-                .map(|v| nettoyer_chaine(v.value()))
-                .unwrap_or_default()
-        };
+        let lire = |t| self.doc.metadata().get(t).map(|v| nettoyer_chaine(v.value())).unwrap_or_default();
         MetaPdf {
             titre: lire(PdfDocumentMetadataTagType::Title),
             auteur: lire(PdfDocumentMetadataTagType::Author),
@@ -167,14 +150,9 @@ impl DocumentPdf {
         let erreur = |e: String| ErreurMoteur::Page(numero, e);
         let page = self.page_pdfium(numero)?;
         let config = PdfRenderConfig::new().set_target_width(largeur_px as Pixels);
-        let image = page
-            .render_with_config(&config)
-            .and_then(|b| b.as_image())
-            .map_err(|e| erreur(e.to_string()))?;
+        let image = page.render_with_config(&config).and_then(|b| b.as_image()).map_err(|e| erreur(e.to_string()))?;
         let mut octets = Cursor::new(Vec::new());
-        image
-            .write_to(&mut octets, image::ImageFormat::Png)
-            .map_err(|e| erreur(e.to_string()))?;
+        image.write_to(&mut octets, image::ImageFormat::Png).map_err(|e| erreur(e.to_string()))?;
         Ok(octets.into_inner())
     }
 }
@@ -182,9 +160,7 @@ impl DocumentPdf {
 /// Page cible (base 1) d'un signet : action locale, sinon destination directe.
 fn page_cible(s: &PdfBookmark<'_>) -> Option<u32> {
     let par_action = s.action().and_then(|a| {
-        a.as_local_destination_action()
-            .and_then(|l| l.destination().ok())
-            .and_then(|d| d.page_index().ok())
+        a.as_local_destination_action().and_then(|l| l.destination().ok()).and_then(|d| d.page_index().ok())
     });
     let index = par_action.or_else(|| s.destination().and_then(|d| d.page_index().ok()))?;
     Some(index as u32 + 1)
@@ -268,11 +244,9 @@ impl Assembleur {
         if let Some(mot) = &self.en_cours {
             let (droite, bas, haut) = self.dernier;
             let saut_horizontal = (c.gauche - droite).abs() > SEUIL_ECART * c.taille;
-            let saut_vertical = (c.haut - haut).abs() > 0.5 * c.taille
-                || (c.bas - bas).abs() > 0.5 * c.taille;
-            let style = mot.gras != c.gras
-                || mot.italique != c.italique
-                || (mot.taille - c.taille).abs() > TOLERANCE_TAILLE;
+            let saut_vertical = (c.haut - haut).abs() > 0.5 * c.taille || (c.bas - bas).abs() > 0.5 * c.taille;
+            let style =
+                mot.gras != c.gras || mot.italique != c.italique || (mot.taille - c.taille).abs() > TOLERANCE_TAILLE;
             if saut_horizontal || saut_vertical || style {
                 // Un écart (ou un saut de ligne) sépare les mots ; un simple
                 // changement de style sans écart les colle l'un à l'autre.

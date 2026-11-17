@@ -23,13 +23,7 @@ struct Brouillon {
 
 impl Brouillon {
     fn nouveau(titre: String) -> Self {
-        Brouillon {
-            titre,
-            sous_titres: Vec::new(),
-            evenements: Vec::new(),
-            notes: Vec::new(),
-            significatif: false,
-        }
+        Brouillon { titre, sous_titres: Vec::new(), evenements: Vec::new(), notes: Vec::new(), significatif: false }
     }
 
     /// Fusionne les appels orphelins (corps et notes) avant recensement et rendu.
@@ -110,9 +104,8 @@ fn placer_le_sommaire(chapitres: &mut Vec<Brouillon>) {
             _ => None,
         })
         .collect();
-    let (partent, restent): (Vec<_>, Vec<_>) = std::mem::take(&mut sommaire.sous_titres)
-        .into_iter()
-        .partition(|(id, _)| ids_du_reste.contains(&id.as_str()));
+    let (partent, restent): (Vec<_>, Vec<_>) =
+        std::mem::take(&mut sommaire.sous_titres).into_iter().partition(|(id, _)| ids_du_reste.contains(&id.as_str()));
     sommaire.sous_titres = restent;
     let precedent = &mut chapitres[s - 1];
     precedent.sous_titres.extend(partent);
@@ -188,17 +181,14 @@ pub fn decouper(markdown: &str, titre_livre: &str) -> Vec<Chapitre> {
             }
             e => {
                 if let Some((_, texte, _)) = dans_titre.as_mut()
-                    && let Event::Text(t) | Event::Code(t) = &e {
-                        texte.push_str(t);
-                    }
+                    && let Event::Text(t) | Event::Code(t) = &e
+                {
+                    texte.push_str(t);
+                }
                 if !matches!(
                     &e,
-                    Event::SoftBreak
-                        | Event::HardBreak
-                        | Event::Start(Tag::HtmlBlock)
-                        | Event::End(TagEnd::HtmlBlock)
-                )
-                    && !matches!(&e, Event::Text(t) if t.trim().is_empty())
+                    Event::SoftBreak | Event::HardBreak | Event::Start(Tag::HtmlBlock) | Event::End(TagEnd::HtmlBlock)
+                ) && !matches!(&e, Event::Text(t) if t.trim().is_empty())
                 {
                     courant.significatif = true;
                 }
