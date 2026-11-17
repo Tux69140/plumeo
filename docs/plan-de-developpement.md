@@ -48,6 +48,10 @@ Ordre conseillé : 1 → 2 → 3 → 4 → 5 → 6.
 - Les PDF de test sont **fabriqués par le code de test**.
 - Le corpus réel (`/home/stef/Documents/RAG`, variable `PLUMEO_CORPUS`) sert aux tests de non-régression marqués `#[ignore]`.
 
+**Code :**
+- `scripts/verifier.sh` passe avant chaque commit : code mis en forme par `cargo fmt` (`rustfmt.toml`, 120 colonnes), aucun avertissement de clippy, tests verts.
+- Une convention partagée par le moteur et l'EPUB (normalisation du texte, identifiants des titres…) n'a qu'une définition, dans `plumeo-commun`.
+
 **Suivi :**
 - Chaque jalon met à jour `docs/corpus.md` (constats sur les 9 PDF).
 - Chaque jalon met à jour la section « État » de ce document.

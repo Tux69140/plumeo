@@ -51,6 +51,10 @@ affiche le texte du corps d'une page et ce qui en a été retiré.
 cargo test --workspace --features plumeo-moteur/fixtures
 ```
 
+Avant chaque commit, `scripts/verifier.sh` contrôle la mise en forme (`cargo fmt`,
+réglée par `rustfmt.toml` : 120 colonnes), l'absence d'avertissement de clippy et les
+tests ; avec `PLUMEO_CORPUS`, il lance aussi le corpus réel.
+
 Les PDF de test sont fabriqués à la volée : aucun PDF n'est versionné. Le test de
 non-régression sur un corpus de livres réels (non fourni) est décrit dans
 `docs/corpus.md`.
